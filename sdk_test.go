@@ -14,6 +14,7 @@ import (
 	"github.com/aws/aws-sdk-go-v2/credentials"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
 	"github.com/aws/aws-sdk-go-v2/service/s3/types"
+	"github.com/johannesboyne/gofakes3"
 )
 
 func newSDKClient(t *testing.T, ts *httptest.Server, key, secret string) *s3.Client {
@@ -286,5 +287,108 @@ func TestSDKMultipartEndToEnd(t *testing.T) {
 	}
 	if len(uploads.Uploads) != 0 {
 		t.Fatalf("aborted upload still listed: %+v", uploads.Uploads)
+	}
+}
+
+func TestSDKListObjectsPagination(t *testing.T) {
+	ts := newTestServerWithAuth(t, "AKID", "SECRET")
+	client := newSDKClient(t, ts, "AKID", "SECRET")
+	ctx := context.Background()
+	if _, err := client.CreateBucket(ctx, &s3.CreateBucketInput{
+		Bucket: aws.String("bucket"),
+	}); err != nil {
+		t.Fatalf("CreateBucket: %v", err)
+	}
+	for _, k := range []string{"a", "b", "c", "d", "e", "f", "g"} {
+		if _, err := client.PutObject(ctx, &s3.PutObjectInput{
+			Bucket: aws.String("bucket"), Key: aws.String(k),
+			Body: strings.NewReader(k),
+		}); err != nil {
+			t.Fatalf("PutObject %s: %v", k, err)
+		}
+	}
+
+	var got []string
+	var token *string
+	for {
+		out, err := client.ListObjectsV2(ctx, &s3.ListObjectsV2Input{
+			Bucket:            aws.String("bucket"),
+			MaxKeys:           aws.Int32(3),
+			ContinuationToken: token,
+		})
+		if err != nil {
+			t.Fatalf("ListObjectsV2: %v", err)
+		}
+		for _, o := range out.Contents {
+			got = append(got, aws.ToString(o.Key))
+		}
+		if !aws.ToBool(out.IsTruncated) {
+			break
+		}
+		if out.NextContinuationToken == nil {
+			t.Fatal("truncated listing without NextContinuationToken")
+		}
+		token = out.NextContinuationToken
+	}
+	if want := "a,b,c,d,e,f,g"; strings.Join(got, ",") != want {
+		t.Fatalf("paginated listing = %v, want %v", got, want)
+	}
+}
+
+func TestSDKListObjectsPaginationMerged(t *testing.T) {
+	ctx := context.Background()
+	local, err := newLocalStore(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	remote, err := newLocalStore(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, k := range []string{"r-a", "r-b", "r-c", "r-d"} {
+		if _, err := remote.Put(ctx, "bucket", k, strings.NewReader(k), "text/plain"); err != nil {
+			t.Fatal(err)
+		}
+	}
+	handler := gofakes3.New(newOverlayBackend(
+		newOverlayStore(local, remote))).Server()
+	handler = sigv4Middleware(handler, "AKID", "SECRET")
+	ts := httptest.NewServer(handler)
+	t.Cleanup(ts.Close)
+	client := newSDKClient(t, ts, "AKID", "SECRET")
+
+	if _, err := client.CreateBucket(ctx, &s3.CreateBucketInput{Bucket: aws.String("bucket")}); err != nil {
+		t.Fatalf("CreateBucket: %v", err)
+	}
+	for _, k := range []string{"l-a", "l-b", "l-c", "l-d"} {
+		if _, err := client.PutObject(ctx, &s3.PutObjectInput{
+			Bucket: aws.String("bucket"), Key: aws.String(k),
+			Body: strings.NewReader(k),
+		}); err != nil {
+			t.Fatalf("PutObject %s: %v", k, err)
+		}
+	}
+
+	var got []string
+	var token *string
+	for {
+		out, err := client.ListObjectsV2(ctx, &s3.ListObjectsV2Input{
+			Bucket:            aws.String("bucket"),
+			MaxKeys:           aws.Int32(3),
+			ContinuationToken: token,
+		})
+		if err != nil {
+			t.Fatalf("ListObjectsV2: %v", err)
+		}
+		for _, o := range out.Contents {
+			got = append(got, aws.ToString(o.Key))
+		}
+		if !aws.ToBool(out.IsTruncated) {
+			break
+		}
+		token = out.NextContinuationToken
+	}
+	if want := "l-a,l-b,l-c,l-d,r-a,r-b,r-c,r-d"; strings.Join(got, ",") != want {
+		t.Fatalf("merged paginated listing = %v, want %v", got, want)
 	}
 }

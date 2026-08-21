@@ -97,8 +97,12 @@ func newTestServerWithAuth(t *testing.T, key, secret string) *httptest.Server {
 	if err != nil {
 		t.Fatal(err)
 	}
+	remote, err := newLocalStore(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
 	handler := gofakes3.New(newOverlayBackend(
-		newOverlayStore(local, newMemStore()))).Server()
+		newOverlayStore(local, remote))).Server()
 	if key != "" {
 		handler = sigv4Middleware(handler, key, secret)
 	}

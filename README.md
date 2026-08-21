@@ -58,6 +58,65 @@ aws --endpoint-url http://127.0.0.1:8080 s3 cp local-file s3://demo/key
 aws --endpoint-url http://127.0.0.1:8080 s3 ls s3://demo/
 ```
 
+## Docker Compose
+
+也可以直接用 Docker 跑。下面这个 compose 文件构建镜像，并起一个
+[silo](https://github.com/pgsty/silo) 容器（S3 兼容后端）作为远端基线，
+得到开箱即用的演示环境：
+
+```yaml
+services:
+  overlay-s3:
+    build: .
+    ports:
+      - "8080:8080"
+    volumes:
+      - ./data:/data
+    command:
+      - -listen=:8080
+      - -local-dir=/data
+      - -remote-endpoint=http://silo:9000
+      - -remote-region=us-east-1
+      - -remote-access-key=minioadmin
+      - -remote-secret-key=minioadmin-secret
+      - -auth-key=demo
+      - -auth-secret=demo-secret
+    depends_on:
+      silo:
+        condition: service_healthy
+
+  silo:
+    image: pgsty/silo:latest
+    command: server /data
+    environment:
+      MINIO_ROOT_USER: minioadmin
+      MINIO_ROOT_PASSWORD: minioadmin-secret
+    volumes:
+      - silo-data:/data
+    healthcheck:
+      test: ["CMD-SHELL", "bash -c 'exec 3<>/dev/tcp/127.0.0.1/9000'"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+volumes:
+  silo-data:
+```
+
+```bash
+docker compose up -d --build
+```
+
+启动后客户端用 `demo` / `demo-secret` 签名访问：
+
+```bash
+aws --endpoint-url http://127.0.0.1:8080 s3api create-bucket --bucket demo
+aws --endpoint-url http://127.0.0.1:8080 s3 cp local-file s3://demo/key
+```
+
+写操作只落在 overlay 卷 `./data`（容器内 `/data`），silo 仅作为远端基线提供读回退。
+要对接真实 S3 时，把 `-remote-*` 参数换成自己的凭据即可（`-remote-endpoint` 留空则使用 AWS）。
+
 ## Local storage layout
 
 Objects live at `local-dir/{bucket}/{key}`, with an etag/content-type sidecar

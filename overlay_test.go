@@ -1,307 +1,37 @@
 package main
 
 import (
-	"bytes"
 	"context"
 	"crypto/md5"
 	"encoding/hex"
 	"errors"
 	"io"
-	"sort"
-	"strconv"
 	"strings"
-	"sync"
 	"testing"
-	"time"
 )
-
-// memStore is an in-memory Store used to stand in for the remote backend.
-type memStore struct {
-	mu         sync.Mutex
-	buckets    map[string]map[string]memObj
-	multiparts map[string]*memMultipart
-}
-
-type memObj struct {
-	data        []byte
-	contentType string
-	lm          time.Time
-}
-
-type memMultipart struct {
-	key         string
-	contentType string
-	initiated   time.Time
-	parts       map[int32][]byte
-}
-
-func newMemStore() *memStore {
-	return &memStore{buckets: map[string]map[string]memObj{}}
-}
-
-func (m *memStore) obj(bucket, key string) (memObj, bool) {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	b, ok := m.buckets[bucket]
-	if !ok {
-		return memObj{}, false
-	}
-	o, ok := b[key]
-	return o, ok
-}
-
-func (m *memStore) put(bucket, key string, data []byte, contentType string) {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	if m.buckets[bucket] == nil {
-		m.buckets[bucket] = map[string]memObj{}
-	}
-	m.buckets[bucket][key] = memObj{
-		data:        append([]byte(nil), data...),
-		contentType: contentType,
-		lm:          time.Now().UTC(),
-	}
-}
 
 func etagOf(data []byte) string {
 	h := md5.Sum(data)
 	return hex.EncodeToString(h[:])
 }
 
-func (m *memStore) Get(ctx context.Context, bucket, key string) (io.ReadCloser, *ObjectMeta, error) {
-	o, ok := m.obj(bucket, key)
-	if !ok {
-		return nil, nil, ErrNotFound
-	}
-	return io.NopCloser(bytes.NewReader(o.data)), &ObjectMeta{
-		Key:          key,
-		Size:         int64(len(o.data)),
-		ETag:         etagOf(o.data),
-		LastModified: o.lm,
-		ContentType:  o.contentType,
-	}, nil
-}
-
-func (m *memStore) Head(ctx context.Context, bucket, key string) (*ObjectMeta, error) {
-	o, ok := m.obj(bucket, key)
-	if !ok {
-		return nil, ErrNotFound
-	}
-	return &ObjectMeta{
-		Key:          key,
-		Size:         int64(len(o.data)),
-		ETag:         etagOf(o.data),
-		LastModified: o.lm,
-		ContentType:  o.contentType,
-	}, nil
-}
-
-func (m *memStore) Put(ctx context.Context, bucket, key string, body io.Reader, contentType string) (*ObjectMeta, error) {
-	data, err := io.ReadAll(body)
-	if err != nil {
-		return nil, err
-	}
-	m.put(bucket, key, data, contentType)
-	return &ObjectMeta{
-		Key:          key,
-		Size:         int64(len(data)),
-		ETag:         etagOf(data),
-		LastModified: time.Now().UTC(),
-		ContentType:  contentType,
-	}, nil
-}
-
-func (m *memStore) List(ctx context.Context, bucket string) ([]ObjectMeta, error) {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	b, ok := m.buckets[bucket]
-	if !ok {
-		return nil, nil
-	}
-	var out []ObjectMeta
-	for key, o := range b {
-		out = append(out, ObjectMeta{
-			Key:          key,
-			Size:         int64(len(o.data)),
-			ETag:         etagOf(o.data),
-			LastModified: o.lm,
-			ContentType:  o.contentType,
-		})
-	}
-	sort.Slice(out, func(i, j int) bool { return out[i].Key < out[j].Key })
-	return out, nil
-}
-
-func (m *memStore) ListBuckets(ctx context.Context) ([]string, error) {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	var out []string
-	for b := range m.buckets {
-		out = append(out, b)
-	}
-	sort.Strings(out)
-	return out, nil
-}
-
-func (m *memStore) BucketExists(ctx context.Context, bucket string) (bool, error) {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	_, ok := m.buckets[bucket]
-	return ok, nil
-}
-
-func (m *memStore) CreateBucket(ctx context.Context, bucket string) error {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	if m.buckets[bucket] == nil {
-		m.buckets[bucket] = map[string]memObj{}
-	}
-	return nil
-}
-
-func (m *memStore) InitiateMultipart(ctx context.Context, bucket, key, contentType string) (string, error) {
-	uploadID, err := newUploadID()
-	if err != nil {
-		return "", err
-	}
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	if m.multiparts == nil {
-		m.multiparts = map[string]*memMultipart{}
-	}
-	m.multiparts[uploadID] = &memMultipart{
-		key:         key,
-		contentType: contentType,
-		initiated:   time.Now().UTC(),
-		parts:       map[int32][]byte{},
-	}
-	return uploadID, nil
-}
-
-func (m *memStore) UploadPart(ctx context.Context, bucket, key, uploadID string, partNumber int32, body io.Reader) (string, error) {
-	m.mu.Lock()
-	mp, ok := m.multiparts[uploadID]
-	m.mu.Unlock()
-	if !ok {
-		return "", errUploadNotFound
-	}
-	data, err := io.ReadAll(body)
-	if err != nil {
-		return "", err
-	}
-	m.mu.Lock()
-	mp.parts[partNumber] = data
-	m.mu.Unlock()
-	return etagOf(data), nil
-}
-
-func (m *memStore) CompleteMultipart(ctx context.Context, bucket, key, uploadID string, parts []CompletedPart) (*ObjectMeta, error) {
-	m.mu.Lock()
-	mp, ok := m.multiparts[uploadID]
-	if !ok {
-		m.mu.Unlock()
-		return nil, errUploadNotFound
-	}
-	complete := make([]CompletedPart, 0, len(parts))
-	for _, p := range parts {
-		data, ok := mp.parts[p.PartNumber]
-		if !ok || etagOf(data) != strings.Trim(p.ETag, `"`) {
-			m.mu.Unlock()
-			return nil, errInvalidPart
-		}
-		complete = append(complete, p)
-	}
-	if len(complete) != len(mp.parts) {
-		m.mu.Unlock()
-		return nil, errInvalidPart
-	}
-	sort.Slice(complete, func(i, j int) bool { return complete[i].PartNumber < complete[j].PartNumber })
-	var data []byte
-	var concat []byte
-	for _, p := range complete {
-		part := mp.parts[p.PartNumber]
-		data = append(data, part...)
-		b, _ := hex.DecodeString(etagOf(part))
-		concat = append(concat, b...)
-	}
-	sum := md5.Sum(concat)
-	etag := hex.EncodeToString(sum[:]) + "-" + strconv.Itoa(len(complete))
-	delete(m.multiparts, uploadID)
-	if m.buckets[bucket] == nil {
-		m.buckets[bucket] = map[string]memObj{}
-	}
-	m.buckets[bucket][key] = memObj{data: data, contentType: mp.contentType, lm: time.Now().UTC()}
-	m.mu.Unlock()
-	return &ObjectMeta{
-		Key:          key,
-		Size:         int64(len(data)),
-		ETag:         etag,
-		LastModified: time.Now().UTC(),
-		ContentType:  mp.contentType,
-	}, nil
-}
-
-func (m *memStore) AbortMultipart(ctx context.Context, bucket, key, uploadID string) error {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	if _, ok := m.multiparts[uploadID]; !ok {
-		return errUploadNotFound
-	}
-	delete(m.multiparts, uploadID)
-	return nil
-}
-
-func (m *memStore) ListParts(ctx context.Context, bucket, key, uploadID string) ([]PartInfo, error) {
-	m.mu.Lock()
-	mp, ok := m.multiparts[uploadID]
-	if !ok {
-		m.mu.Unlock()
-		return nil, errUploadNotFound
-	}
-	var out []PartInfo
-	for n, data := range mp.parts {
-		out = append(out, PartInfo{
-			PartNumber:   n,
-			ETag:         etagOf(data),
-			Size:         int64(len(data)),
-			LastModified: mp.initiated,
-		})
-	}
-	m.mu.Unlock()
-	sort.Slice(out, func(i, j int) bool { return out[i].PartNumber < out[j].PartNumber })
-	return out, nil
-}
-
-func (m *memStore) ListMultipartUploads(ctx context.Context, bucket string) ([]MultipartInfo, error) {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	var out []MultipartInfo
-	for id, mp := range m.multiparts {
-		out = append(out, MultipartInfo{Key: mp.key, UploadID: id, Initiated: mp.initiated})
-	}
-	sort.Slice(out, func(i, j int) bool {
-		if out[i].Key != out[j].Key {
-			return out[i].Key < out[j].Key
-		}
-		return out[i].UploadID < out[j].UploadID
-	})
-	return out, nil
-}
-
-func newTestOverlay(t *testing.T) (*overlayStore, *localStore, *memStore) {
+func newTestOverlay(t *testing.T) (*overlayStore, *localStore, *localStore) {
 	t.Helper()
 	local, err := newLocalStore(t.TempDir())
 	if err != nil {
 		t.Fatal(err)
 	}
-	remote := newMemStore()
+	remote, err := newLocalStore(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
 	return newOverlayStore(local, remote), local, remote
 }
 
 func TestOverlayGetPrefersLocal(t *testing.T) {
 	ov, _, remote := newTestOverlay(t)
-	remote.put("bucket", "a", []byte("remote-a"), "text/plain")
-	remote.put("bucket", "c", []byte("remote-c"), "text/plain")
+	remote.Put(context.Background(), "bucket", "a", strings.NewReader("remote-a"), "text/plain")
+	remote.Put(context.Background(), "bucket", "c", strings.NewReader("remote-c"), "text/plain")
 
 	if _, err := ov.Put(context.Background(), "bucket", "b", strings.NewReader("local-b"), "text/plain"); err != nil {
 		t.Fatal(err)
@@ -343,16 +73,16 @@ func TestOverlayPutOnlyWritesLocal(t *testing.T) {
 	if _, err := ov.Put(context.Background(), "bucket", "k", strings.NewReader("x"), "text/plain"); err != nil {
 		t.Fatal(err)
 	}
-	if _, ok := remote.obj("bucket", "k"); ok {
-		t.Fatal("put must not touch the remote store")
+	if _, err := remote.Head(context.Background(), "bucket", "k"); err != ErrNotFound {
+		t.Fatalf("put must not touch the remote store, head err = %v", err)
 	}
 }
 
 func TestOverlayListMerges(t *testing.T) {
 	ov, _, remote := newTestOverlay(t)
-	remote.put("bucket", "a", []byte("remote-a"), "text/plain")
-	remote.put("bucket", "c", []byte("remote-c"), "text/plain")
-	remote.put("bucket", "d", []byte("remote-d"), "text/plain")
+	remote.Put(context.Background(), "bucket", "a", strings.NewReader("remote-a"), "text/plain")
+	remote.Put(context.Background(), "bucket", "c", strings.NewReader("remote-c"), "text/plain")
+	remote.Put(context.Background(), "bucket", "d", strings.NewReader("remote-d"), "text/plain")
 
 	if _, err := ov.Put(context.Background(), "bucket", "b", strings.NewReader("local-b"), "text/plain"); err != nil {
 		t.Fatal(err)

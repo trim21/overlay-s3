@@ -261,3 +261,94 @@ func TestIntegrationOverlayAgainstRealS3(t *testing.T) {
 		t.Fatalf("multipart assembled body mismatch: %d bytes", len(data))
 	}
 }
+
+func TestIntegrationListPagination(t *testing.T) {
+	endpoint, accessKey, secretKey, region := integrationEnv(t)
+	ctx := context.Background()
+
+	seed := newRemoteClient(t, endpoint, accessKey, secretKey, region)
+	bucket := fmt.Sprintf("overlay-pag-%d", time.Now().UnixNano())
+	if _, err := seed.CreateBucket(ctx, &s3.CreateBucketInput{
+		Bucket: aws.String(bucket),
+	}); err != nil {
+		t.Fatalf("seed CreateBucket: %v", err)
+	}
+	t.Cleanup(func() {
+		var token *string
+		for {
+			list, err := seed.ListObjectsV2(ctx, &s3.ListObjectsV2Input{
+				Bucket: aws.String(bucket), ContinuationToken: token,
+			})
+			if err != nil {
+				return
+			}
+			for _, o := range list.Contents {
+				_, _ = seed.DeleteObject(ctx, &s3.DeleteObjectInput{
+					Bucket: aws.String(bucket), Key: o.Key,
+				})
+			}
+			if !aws.ToBool(list.IsTruncated) {
+				break
+			}
+			token = list.NextContinuationToken
+		}
+		_, _ = seed.DeleteBucket(ctx, &s3.DeleteBucketInput{Bucket: aws.String(bucket)})
+	})
+
+	// seed more than one backend page (1000) so remoteStore.List must walk
+	// continuation tokens
+	const n = 1001
+	for i := 0; i < n; i++ {
+		key := fmt.Sprintf("key-%05d", i)
+		if _, err := seed.PutObject(ctx, &s3.PutObjectInput{
+			Bucket: aws.String(bucket), Key: aws.String(key),
+			Body: strings.NewReader(key),
+		}); err != nil {
+			t.Fatalf("seed PutObject %s: %v", key, err)
+		}
+	}
+
+	remote, err := newRemoteStore(ctx, endpoint, region, accessKey, secretKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	local, err := newLocalStore(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	handler := gofakes3.New(newOverlayBackend(
+		newOverlayStore(local, remote))).Server()
+	ts := httptest.NewServer(handler)
+	t.Cleanup(ts.Close)
+	client := newSDKClientForEndpoint(t, ts.URL, "test", "test", region)
+
+	var got []string
+	var token *string
+	for {
+		out, err := client.ListObjectsV2(ctx, &s3.ListObjectsV2Input{
+			Bucket:            aws.String(bucket),
+			ContinuationToken: token,
+		})
+		if err != nil {
+			t.Fatalf("ListObjectsV2: %v", err)
+		}
+		for _, o := range out.Contents {
+			got = append(got, aws.ToString(o.Key))
+		}
+		if !aws.ToBool(out.IsTruncated) {
+			break
+		}
+		if out.NextContinuationToken == nil {
+			t.Fatal("truncated listing without NextContinuationToken")
+		}
+		token = out.NextContinuationToken
+	}
+	if len(got) != n {
+		t.Fatalf("merged listing = %d objects, want %d", len(got), n)
+	}
+	for i, want := range got {
+		if k := fmt.Sprintf("key-%05d", i); want != k {
+			t.Fatalf("listing[%d] = %q, want %q", i, want, k)
+		}
+	}
+}
