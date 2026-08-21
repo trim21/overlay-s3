@@ -14,6 +14,7 @@ import (
 	"github.com/aws/aws-sdk-go-v2/credentials"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
 	"github.com/aws/aws-sdk-go-v2/service/s3/types"
+	"github.com/aws/smithy-go"
 	"github.com/johannesboyne/gofakes3"
 )
 
@@ -391,4 +392,105 @@ func TestSDKListObjectsPaginationMerged(t *testing.T) {
 	if want := "l-a,l-b,l-c,l-d,r-a,r-b,r-c,r-d"; strings.Join(got, ",") != want {
 		t.Fatalf("merged paginated listing = %v, want %v", got, want)
 	}
+}
+
+func TestSDKProxyFallback(t *testing.T) {
+	ctx := context.Background()
+	local, err := newLocalStore(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	remote, err := newLocalStore(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := remote.Put(ctx, "bucket", "proxy-key", strings.NewReader("remote-data"), "text/plain"); err != nil {
+		t.Fatal(err)
+	}
+	handler := gofakes3.New(newOverlayBackend(
+		newOverlayStore(local, remote))).Server()
+	handler = sigv4Middleware(handler, "AKID", "SECRET")
+	ts := httptest.NewServer(handler)
+	t.Cleanup(ts.Close)
+	client := newSDKClient(t, ts, "AKID", "SECRET")
+
+	if _, err := client.CreateBucket(ctx, &s3.CreateBucketInput{Bucket: aws.String("bucket")}); err != nil {
+		t.Fatalf("CreateBucket: %v", err)
+	}
+
+	// GET falls back to the remote store
+	got, err := client.GetObject(ctx, &s3.GetObjectInput{
+		Bucket: aws.String("bucket"), Key: aws.String("proxy-key"),
+	})
+	if err != nil {
+		t.Fatalf("GetObject: %v", err)
+	}
+	data, err := io.ReadAll(got.Body)
+	got.Body.Close()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(data) != "remote-data" {
+		t.Fatalf("proxy body = %q", data)
+	}
+	wantETag := `"` + etagOf([]byte("remote-data")) + `"`
+	if etag := aws.ToString(got.ETag); etag != wantETag {
+		t.Fatalf("proxy etag = %q, want %q", etag, wantETag)
+	}
+
+	// HEAD falls back too
+	head, err := client.HeadObject(ctx, &s3.HeadObjectInput{
+		Bucket: aws.String("bucket"), Key: aws.String("proxy-key"),
+	})
+	if err != nil {
+		t.Fatalf("HeadObject: %v", err)
+	}
+	if aws.ToInt64(head.ContentLength) != int64(len("remote-data")) {
+		t.Fatalf("proxy head size = %d", aws.ToInt64(head.ContentLength))
+	}
+	if etag := aws.ToString(head.ETag); etag != wantETag {
+		t.Fatalf("proxy head etag = %q, want %q", etag, wantETag)
+	}
+
+	// neither store has the key
+	if _, err := client.GetObject(ctx, &s3.GetObjectInput{
+		Bucket: aws.String("bucket"), Key: aws.String("missing"),
+	}); err == nil {
+		t.Fatal("GetObject on missing key should fail")
+	} else {
+		var nsk *types.NoSuchKey
+		if !errors.As(err, &nsk) {
+			t.Fatalf("expected NoSuchKey, got %v", err)
+		}
+	}
+}
+
+func TestSDKMissingBucket(t *testing.T) {
+	ts := newTestServerWithAuth(t, "AKID", "SECRET")
+	client := newSDKClient(t, ts, "AKID", "SECRET")
+	ctx := context.Background()
+
+	assertAPIError := func(err error, wantCode string) {
+		t.Helper()
+		var apiErr smithy.APIError
+		if !errors.As(err, &apiErr) || apiErr.ErrorCode() != wantCode {
+			t.Fatalf("expected %s error, got %v", wantCode, err)
+		}
+	}
+
+	_, err := client.ListObjectsV2(ctx, &s3.ListObjectsV2Input{
+		Bucket: aws.String("missing"),
+	})
+	assertAPIError(err, "NoSuchBucket")
+
+	_, err = client.PutObject(ctx, &s3.PutObjectInput{
+		Bucket: aws.String("missing"), Key: aws.String("key"),
+		Body: strings.NewReader("x"),
+	})
+	assertAPIError(err, "NoSuchBucket")
+
+	_, err = client.HeadObject(ctx, &s3.HeadObjectInput{
+		Bucket: aws.String("missing"), Key: aws.String("key"),
+	})
+	assertAPIError(err, "NotFound")
 }

@@ -194,6 +194,53 @@ func TestServerPutGetHeadList(t *testing.T) {
 	}
 }
 
+func TestServerHeadObject(t *testing.T) {
+	ts := newTestServer(t)
+	createBucket(t, ts.URL+"/bucket")
+	resp := putObject(t, ts.URL+"/bucket/key", "hello")
+	io.Copy(io.Discard, resp.Body)
+	resp.Body.Close()
+
+	req, err := http.NewRequest(http.MethodHead, ts.URL+"/bucket/key", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	hresp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	hresp.Body.Close()
+	if hresp.StatusCode != http.StatusOK {
+		t.Fatalf("head status %d", hresp.StatusCode)
+	}
+	wantETag := `"` + etagOf([]byte("hello")) + `"`
+	if hresp.Header.Get("ETag") != wantETag {
+		t.Fatalf("head etag %q, want %q", hresp.Header.Get("ETag"), wantETag)
+	}
+	if hresp.Header.Get("Content-Length") != "5" {
+		t.Fatalf("head content-length %q", hresp.Header.Get("Content-Length"))
+	}
+	if ct := hresp.Header.Get("Content-Type"); ct != "text/plain" {
+		t.Fatalf("head content-type %q", ct)
+	}
+	if hresp.Header.Get("Last-Modified") == "" {
+		t.Fatal("head missing Last-Modified")
+	}
+
+	req, err = http.NewRequest(http.MethodHead, ts.URL+"/bucket/missing", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	mresp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	mresp.Body.Close()
+	if mresp.StatusCode != http.StatusNotFound {
+		t.Fatalf("head missing status %d", mresp.StatusCode)
+	}
+}
+
 func TestServerListObjectsV2(t *testing.T) {
 	ts := newTestServer(t)
 	createBucket(t, ts.URL+"/bucket")

@@ -78,6 +78,48 @@ func TestOverlayPutOnlyWritesLocal(t *testing.T) {
 	}
 }
 
+func TestOverlayHeadFallback(t *testing.T) {
+	ov, _, remote := newTestOverlay(t)
+	ctx := context.Background()
+	if _, err := remote.Put(ctx, "bucket", "remote-key", strings.NewReader("remote-data"), "text/plain"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := ov.Put(ctx, "bucket", "local-key", strings.NewReader("local-data"), "text/plain"); err != nil {
+		t.Fatal(err)
+	}
+
+	meta, err := ov.Head(ctx, "bucket", "local-key")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if meta.ETag != etagOf([]byte("local-data")) {
+		t.Fatalf("local head etag = %q", meta.ETag)
+	}
+
+	meta, err = ov.Head(ctx, "bucket", "remote-key")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if meta.ETag != etagOf([]byte("remote-data")) {
+		t.Fatalf("remote head etag = %q", meta.ETag)
+	}
+
+	if _, err := ov.Head(ctx, "bucket", "missing"); err != ErrNotFound {
+		t.Fatalf("expected ErrNotFound, got %v", err)
+	}
+}
+
+func TestOverlayListMissingBucket(t *testing.T) {
+	ov, _, _ := newTestOverlay(t)
+	objs, err := ov.List(context.Background(), "no-such-bucket")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(objs) != 0 {
+		t.Fatalf("expected empty list, got %v", objs)
+	}
+}
+
 func TestOverlayListMerges(t *testing.T) {
 	ov, _, remote := newTestOverlay(t)
 	remote.Put(context.Background(), "bucket", "a", strings.NewReader("remote-a"), "text/plain")
@@ -134,6 +176,16 @@ func TestOverlayBucketExists(t *testing.T) {
 	}
 	if ok, err := ov.BucketExists(context.Background(), "missing"); err != nil || ok {
 		t.Fatalf("missing bucket: ok=%v err=%v", ok, err)
+	}
+}
+
+func TestOverlayBucketExistsLocal(t *testing.T) {
+	ov, _, _ := newTestOverlay(t)
+	if err := ov.CreateBucket(context.Background(), "lb"); err != nil {
+		t.Fatal(err)
+	}
+	if ok, err := ov.BucketExists(context.Background(), "lb"); err != nil || !ok {
+		t.Fatalf("local bucket should exist: ok=%v err=%v", ok, err)
 	}
 }
 

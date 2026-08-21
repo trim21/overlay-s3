@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"io"
 	"net/http/httptest"
@@ -259,6 +260,23 @@ func TestIntegrationOverlayAgainstRealS3(t *testing.T) {
 	got.Body.Close()
 	if !bytes.Equal(data, want) {
 		t.Fatalf("multipart assembled body mismatch: %d bytes", len(data))
+	}
+
+	// 7. keys that exist nowhere are 404 (NoSuchKey)
+	if _, err := client.GetObject(ctx, &s3.GetObjectInput{
+		Bucket: aws.String(bucket), Key: aws.String("no-such-key"),
+	}); err == nil {
+		t.Fatal("GetObject on missing key should fail")
+	} else {
+		var nsk *types.NoSuchKey
+		if !errors.As(err, &nsk) {
+			t.Fatalf("expected NoSuchKey, got %v", err)
+		}
+	}
+	if _, err := client.HeadObject(ctx, &s3.HeadObjectInput{
+		Bucket: aws.String(bucket), Key: aws.String("no-such-key"),
+	}); err == nil {
+		t.Fatal("HeadObject on missing key should fail")
 	}
 }
 
