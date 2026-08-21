@@ -1,0 +1,43 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    services:
+      silo:
+        image: pgsty/silo:latest
+        env:
+          MINIO_ROOT_USER: minioadmin
+          MINIO_ROOT_PASSWORD: minioadmin-secret
+        ports:
+          - 9000:9000
+        options: >-
+          --health-cmd "mcli alias set health http://127.0.0.1:9000 minioadmin minioadmin-secret >/dev/null 2>&1 && mcli ls health >/dev/null 2>&1 || exit 1"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 20
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.25"
+          cache: true
+
+      - name: Build and vet
+        run: go build ./... && go vet ./...
+
+      - name: Unit tests
+        run: go test ./...
+
+      - name: Integration tests against real S3
+        run: go test -run TestIntegration -v ./...
+        env:
+          S3_TEST_ENDPOINT: http://127.0.0.1:9000
+          S3_TEST_ACCESS_KEY: minioadmin
+          S3_TEST_SECRET_KEY: minioadmin-secret
+          S3_TEST_REGION: us-east-1
