@@ -188,32 +188,29 @@ func (s *s3Store) Head(ctx context.Context, bucket, key string) (*ObjectMeta, er
 	}, nil
 }
 
-// knownLength returns body and its length: size when declared, otherwise
-// the body buffered into memory so a length can be derived. S3-style
-// backends require Content-Length (or aws-chunked framing) on writes, so
-// the SDK must never send a bare chunked request.
-func knownLength(body io.Reader, size int64) (io.Reader, int64, error) {
-	if size >= 0 {
-		return body, size, nil
-	}
+// putBody buffers the payload so the SDK gets a seekable body with a known
+// length: SigV4 needs to hash the bytes (requiring a rewind) and S3-style
+// backends require Content-Length. Multipart part bodies are buffered the
+// same way by UploadPart.
+func putBody(body io.Reader) (*bytes.Reader, error) {
 	data, err := io.ReadAll(body)
 	if err != nil {
-		return nil, 0, err
+		return nil, err
 	}
-	return bytes.NewReader(data), int64(len(data)), nil
+	return bytes.NewReader(data), nil
 }
 
-func (s *s3Store) Put(ctx context.Context, bucket, key string, body io.Reader, size int64, contentType string) (*ObjectMeta, error) {
+func (s *s3Store) Put(ctx context.Context, bucket, key string, body io.Reader, contentType string) (*ObjectMeta, error) {
 	b, k := s.mapKey(bucket, key)
-	body, size, err := knownLength(body, size)
+	data, err := putBody(body)
 	if err != nil {
 		return nil, err
 	}
 	out, err := s.client.PutObject(ctx, &s3.PutObjectInput{
 		Bucket:        aws.String(b),
 		Key:           aws.String(k),
-		Body:          body,
-		ContentLength: aws.Int64(size),
+		Body:          data,
+		ContentLength: aws.Int64(int64(data.Len())),
 		ContentType:   aws.String(contentType),
 	})
 	if err != nil {
@@ -373,9 +370,9 @@ func (s *s3Store) InitiateMultipart(ctx context.Context, bucket, key, contentTyp
 	return aws.ToString(out.UploadId), nil
 }
 
-func (s *s3Store) UploadPart(ctx context.Context, bucket, key, uploadID string, partNumber int32, body io.Reader, size int64) (string, error) {
+func (s *s3Store) UploadPart(ctx context.Context, bucket, key, uploadID string, partNumber int32, body io.Reader) (string, error) {
 	b, k := s.mapKey(bucket, key)
-	body, size, err := knownLength(body, size)
+	data, err := putBody(body)
 	if err != nil {
 		return "", err
 	}
@@ -384,8 +381,8 @@ func (s *s3Store) UploadPart(ctx context.Context, bucket, key, uploadID string, 
 		Key:           aws.String(k),
 		UploadId:      aws.String(uploadID),
 		PartNumber:    aws.Int32(partNumber),
-		Body:          body,
-		ContentLength: aws.Int64(size),
+		Body:          data,
+		ContentLength: aws.Int64(int64(data.Len())),
 	})
 	if err != nil {
 		return "", err

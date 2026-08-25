@@ -235,7 +235,7 @@ func (b *overlayBackend) PutObject(bucketName, key string, meta map[string]strin
 	if contentType == "" {
 		contentType = "binary/octet-stream"
 	}
-	if _, err := b.store.Put(context.Background(), bucketName, key, input, size, contentType); err != nil {
+	if _, err := b.store.Put(context.Background(), bucketName, key, input, contentType); err != nil {
 		return gofakes3.PutObjectResult{}, err
 	}
 	return gofakes3.PutObjectResult{}, nil
@@ -258,7 +258,7 @@ func (b *overlayBackend) CopyObject(srcBucket, srcKey, dstBucket, dstKey string,
 	if contentType == "" {
 		contentType = "binary/octet-stream"
 	}
-	dstMeta, err := b.store.Put(context.Background(), dstBucket, dstKey, rc, srcMeta.Size, contentType)
+	dstMeta, err := b.store.Put(context.Background(), dstBucket, dstKey, rc, contentType)
 	if err != nil {
 		return gofakes3.CopyObjectResult{}, err
 	}
@@ -282,7 +282,7 @@ func (b *overlayBackend) CreateMultipartUpload(bucket, object string, meta map[s
 
 func (b *overlayBackend) UploadPart(bucket, object string, id gofakes3.UploadID, partNumber int, contentLength int64, input io.Reader) (string, error) {
 	return b.store.UploadPart(context.Background(), bucket, object, string(id),
-		int32(partNumber), input, contentLength)
+		int32(partNumber), input)
 }
 
 func (b *overlayBackend) CompleteMultipartUpload(bucket, object string, id gofakes3.UploadID, input *gofakes3.CompleteMultipartUploadRequest) (gofakes3.VersionID, string, error) {

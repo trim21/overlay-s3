@@ -52,7 +52,7 @@ func newMemStore() *memStore {
 	}
 }
 
-func (s *memStore) Put(ctx context.Context, bucket, key string, body io.Reader, size int64, contentType string) (*ObjectMeta, error) {
+func (s *memStore) Put(ctx context.Context, bucket, key string, body io.Reader, contentType string) (*ObjectMeta, error) {
 	data, err := io.ReadAll(body)
 	if err != nil {
 		return nil, err
@@ -168,7 +168,7 @@ func (s *memStore) uploadLocked(id, bucket, key string) (*memUpload, bool) {
 	return u, true
 }
 
-func (s *memStore) UploadPart(ctx context.Context, bucket, key, uploadID string, partNumber int32, body io.Reader, size int64) (string, error) {
+func (s *memStore) UploadPart(ctx context.Context, bucket, key, uploadID string, partNumber int32, body io.Reader) (string, error) {
 	data, err := io.ReadAll(body)
 	if err != nil {
 		return "", err

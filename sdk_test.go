@@ -340,7 +340,7 @@ func TestSDKListObjectsPaginationMerged(t *testing.T) {
 	ctx := context.Background()
 	baseline := newMemStore()
 	for _, k := range []string{"r-a", "r-b", "r-c", "r-d"} {
-		if _, err := baseline.Put(ctx, "bucket", k, strings.NewReader(k), -1, "text/plain"); err != nil {
+		if _, err := baseline.Put(ctx, "bucket", k, strings.NewReader(k), "text/plain"); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -390,7 +390,7 @@ func TestSDKListObjectsPaginationMerged(t *testing.T) {
 func TestSDKProxyFallback(t *testing.T) {
 	ctx := context.Background()
 	baseline := newMemStore()
-	if _, err := baseline.Put(ctx, "bucket", "proxy-key", strings.NewReader("remote-data"), -1, "text/plain"); err != nil {
+	if _, err := baseline.Put(ctx, "bucket", "proxy-key", strings.NewReader("remote-data"), "text/plain"); err != nil {
 		t.Fatal(err)
 	}
 	handler := gofakes3.New(newOverlayBackend(

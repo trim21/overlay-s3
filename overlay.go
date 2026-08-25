@@ -40,8 +40,8 @@ func (o *overlayStore) Head(ctx context.Context, bucket, key string) (*ObjectMet
 	return o.baseline.Head(ctx, bucket, key)
 }
 
-func (o *overlayStore) Put(ctx context.Context, bucket, key string, body io.Reader, size int64, contentType string) (*ObjectMeta, error) {
-	return o.overlay.Put(ctx, bucket, key, body, size, contentType)
+func (o *overlayStore) Put(ctx context.Context, bucket, key string, body io.Reader, contentType string) (*ObjectMeta, error) {
+	return o.overlay.Put(ctx, bucket, key, body, contentType)
 }
 
 func (o *overlayStore) List(ctx context.Context, bucket string) ([]ObjectMeta, error) {
@@ -108,8 +108,8 @@ func (o *overlayStore) InitiateMultipart(ctx context.Context, bucket, key, conte
 	return o.overlay.InitiateMultipart(ctx, bucket, key, contentType)
 }
 
-func (o *overlayStore) UploadPart(ctx context.Context, bucket, key, uploadID string, partNumber int32, body io.Reader, size int64) (string, error) {
-	return o.overlay.UploadPart(ctx, bucket, key, uploadID, partNumber, body, size)
+func (o *overlayStore) UploadPart(ctx context.Context, bucket, key, uploadID string, partNumber int32, body io.Reader) (string, error) {
+	return o.overlay.UploadPart(ctx, bucket, key, uploadID, partNumber, body)
 }
 
 func (o *overlayStore) CompleteMultipart(ctx context.Context, bucket, key, uploadID string, parts []CompletedPart) (*ObjectMeta, error) {
