@@ -338,21 +338,14 @@ func TestSDKListObjectsPagination(t *testing.T) {
 
 func TestSDKListObjectsPaginationMerged(t *testing.T) {
 	ctx := context.Background()
-	local, err := newLocalStore(t.TempDir())
-	if err != nil {
-		t.Fatal(err)
-	}
-	remote, err := newLocalStore(t.TempDir())
-	if err != nil {
-		t.Fatal(err)
-	}
+	baseline := newMemStore()
 	for _, k := range []string{"r-a", "r-b", "r-c", "r-d"} {
-		if _, err := remote.Put(ctx, "bucket", k, strings.NewReader(k), "text/plain"); err != nil {
+		if _, err := baseline.Put(ctx, "bucket", k, strings.NewReader(k), "text/plain"); err != nil {
 			t.Fatal(err)
 		}
 	}
 	handler := gofakes3.New(newOverlayBackend(
-		newOverlayStore(local, remote))).Server()
+		newOverlayStore(newMemStore(), baseline))).Server()
 	handler = sigv4Middleware(handler, "AKID", "SECRET")
 	ts := httptest.NewServer(handler)
 	t.Cleanup(ts.Close)
@@ -396,19 +389,12 @@ func TestSDKListObjectsPaginationMerged(t *testing.T) {
 
 func TestSDKProxyFallback(t *testing.T) {
 	ctx := context.Background()
-	local, err := newLocalStore(t.TempDir())
-	if err != nil {
-		t.Fatal(err)
-	}
-	remote, err := newLocalStore(t.TempDir())
-	if err != nil {
-		t.Fatal(err)
-	}
-	if _, err := remote.Put(ctx, "bucket", "proxy-key", strings.NewReader("remote-data"), "text/plain"); err != nil {
+	baseline := newMemStore()
+	if _, err := baseline.Put(ctx, "bucket", "proxy-key", strings.NewReader("remote-data"), "text/plain"); err != nil {
 		t.Fatal(err)
 	}
 	handler := gofakes3.New(newOverlayBackend(
-		newOverlayStore(local, remote))).Server()
+		newOverlayStore(newMemStore(), baseline))).Server()
 	handler = sigv4Middleware(handler, "AKID", "SECRET")
 	ts := httptest.NewServer(handler)
 	t.Cleanup(ts.Close)

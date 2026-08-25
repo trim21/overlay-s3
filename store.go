@@ -40,6 +40,14 @@ type MultipartInfo struct {
 	Initiated time.Time
 }
 
+var (
+	// errUploadNotFound is returned for operations on an unknown upload ID.
+	errUploadNotFound = errors.New("multipart upload not found")
+	// errInvalidPart is returned when CompleteMultipartUpload names parts
+	// that were not staged or carry a mismatched ETag.
+	errInvalidPart = errors.New("invalid part")
+)
+
 // Store is the minimal object-store surface the overlay composes.
 type Store interface {
 	Get(ctx context.Context, bucket, key string) (io.ReadCloser, *ObjectMeta, error)
