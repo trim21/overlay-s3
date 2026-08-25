@@ -46,6 +46,11 @@ func newS3Client(ctx context.Context, endpoint, region, accessKey, secretKey str
 			o.BaseEndpoint = aws.String(endpoint)
 		})
 	}
+	// only add checksums when an operation requires them; the default
+	// CRC32-with-trailers streaming mode trips up some S3 implementations
+	opts = append(opts, func(o *s3.Options) {
+		o.RequestChecksumCalculation = aws.RequestChecksumCalculationWhenRequired
+	})
 	return s3.NewFromConfig(cfg, opts...), nil
 }
 
