@@ -394,9 +394,10 @@ func (s *s3Store) CompleteMultipart(ctx context.Context, bucket, key, uploadID s
 	b, k := s.mapKey(bucket, key)
 	var completed []types.CompletedPart
 	for _, p := range parts {
+		etag := strings.Trim(p.ETag, `"`)
 		completed = append(completed, types.CompletedPart{
 			PartNumber: aws.Int32(p.PartNumber),
-			ETag:       aws.String(`"` + p.ETag + `"`),
+			ETag:       aws.String(`"` + etag + `"`),
 		})
 	}
 	out, err := s.client.CompleteMultipartUpload(ctx, &s3.CompleteMultipartUploadInput{
