@@ -71,6 +71,11 @@ func newIntegrationStores(t *testing.T) *integrationStores {
 	if err := s.overlay.EnsureBucket(ctx); err != nil {
 		t.Fatalf("EnsureBucket overlay: %v", err)
 	}
+	if _, err := s.seed.CreateBucket(ctx, &s3.CreateBucketInput{
+		Bucket: aws.String(s.baselineBucket),
+	}); err != nil {
+		t.Fatalf("CreateBucket baseline: %v", err)
+	}
 	s.baseline, err = newRemoteStore(ctx, endpoint, region, accessKey, secretKey)
 	if err != nil {
 		t.Fatal(err)
