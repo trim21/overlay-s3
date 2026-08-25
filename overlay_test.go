@@ -24,13 +24,13 @@ func newTestOverlay(t *testing.T) (*overlayStore, *memStore, *memStore) {
 
 func TestOverlayGetPrefersLocal(t *testing.T) {
 	ov, _, remote := newTestOverlay(t)
-	remote.Put(context.Background(), "bucket", "a", strings.NewReader("remote-a"), "text/plain")
-	remote.Put(context.Background(), "bucket", "c", strings.NewReader("remote-c"), "text/plain")
+	remote.Put(context.Background(), "bucket", "a", strings.NewReader("remote-a"), -1, "text/plain")
+	remote.Put(context.Background(), "bucket", "c", strings.NewReader("remote-c"), -1, "text/plain")
 
-	if _, err := ov.Put(context.Background(), "bucket", "b", strings.NewReader("local-b"), "text/plain"); err != nil {
+	if _, err := ov.Put(context.Background(), "bucket", "b", strings.NewReader("local-b"), -1, "text/plain"); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := ov.Put(context.Background(), "bucket", "a", strings.NewReader("local-a"), "text/plain"); err != nil {
+	if _, err := ov.Put(context.Background(), "bucket", "a", strings.NewReader("local-a"), -1, "text/plain"); err != nil {
 		t.Fatal(err)
 	}
 
@@ -64,7 +64,7 @@ func TestOverlayGetPrefersLocal(t *testing.T) {
 
 func TestOverlayPutOnlyWritesLocal(t *testing.T) {
 	ov, _, remote := newTestOverlay(t)
-	if _, err := ov.Put(context.Background(), "bucket", "k", strings.NewReader("x"), "text/plain"); err != nil {
+	if _, err := ov.Put(context.Background(), "bucket", "k", strings.NewReader("x"), -1, "text/plain"); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := remote.Head(context.Background(), "bucket", "k"); err != ErrNotFound {
@@ -75,10 +75,10 @@ func TestOverlayPutOnlyWritesLocal(t *testing.T) {
 func TestOverlayHeadFallback(t *testing.T) {
 	ov, _, remote := newTestOverlay(t)
 	ctx := context.Background()
-	if _, err := remote.Put(ctx, "bucket", "remote-key", strings.NewReader("remote-data"), "text/plain"); err != nil {
+	if _, err := remote.Put(ctx, "bucket", "remote-key", strings.NewReader("remote-data"), -1, "text/plain"); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := ov.Put(ctx, "bucket", "local-key", strings.NewReader("local-data"), "text/plain"); err != nil {
+	if _, err := ov.Put(ctx, "bucket", "local-key", strings.NewReader("local-data"), -1, "text/plain"); err != nil {
 		t.Fatal(err)
 	}
 
@@ -116,14 +116,14 @@ func TestOverlayListMissingBucket(t *testing.T) {
 
 func TestOverlayListMerges(t *testing.T) {
 	ov, _, remote := newTestOverlay(t)
-	remote.Put(context.Background(), "bucket", "a", strings.NewReader("remote-a"), "text/plain")
-	remote.Put(context.Background(), "bucket", "c", strings.NewReader("remote-c"), "text/plain")
-	remote.Put(context.Background(), "bucket", "d", strings.NewReader("remote-d"), "text/plain")
+	remote.Put(context.Background(), "bucket", "a", strings.NewReader("remote-a"), -1, "text/plain")
+	remote.Put(context.Background(), "bucket", "c", strings.NewReader("remote-c"), -1, "text/plain")
+	remote.Put(context.Background(), "bucket", "d", strings.NewReader("remote-d"), -1, "text/plain")
 
-	if _, err := ov.Put(context.Background(), "bucket", "b", strings.NewReader("local-b"), "text/plain"); err != nil {
+	if _, err := ov.Put(context.Background(), "bucket", "b", strings.NewReader("local-b"), -1, "text/plain"); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := ov.Put(context.Background(), "bucket", "a", strings.NewReader("local-a"), "text/plain"); err != nil {
+	if _, err := ov.Put(context.Background(), "bucket", "a", strings.NewReader("local-a"), -1, "text/plain"); err != nil {
 		t.Fatal(err)
 	}
 
@@ -193,11 +193,11 @@ func TestOverlayMultipartRoundTrip(t *testing.T) {
 	}
 	part1 := strings.Repeat("a", 100)
 	part2 := strings.Repeat("b", 100)
-	e1, err := ov.UploadPart(ctx, "bucket", "big", uploadID, 1, strings.NewReader(part1))
+	e1, err := ov.UploadPart(ctx, "bucket", "big", uploadID, 1, strings.NewReader(part1), int64(len(part1)))
 	if err != nil {
 		t.Fatal(err)
 	}
-	e2, err := ov.UploadPart(ctx, "bucket", "big", uploadID, 2, strings.NewReader(part2))
+	e2, err := ov.UploadPart(ctx, "bucket", "big", uploadID, 2, strings.NewReader(part2), int64(len(part2)))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -262,7 +262,7 @@ func TestOverlayMultipartAbort(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := ov.UploadPart(ctx, "bucket", "k", uploadID, 1, strings.NewReader("x")); err != nil {
+	if _, err := ov.UploadPart(ctx, "bucket", "k", uploadID, 1, strings.NewReader("x"), 1); err != nil {
 		t.Fatal(err)
 	}
 	uploads, err := ov.ListMultipartUploads(ctx, "bucket")

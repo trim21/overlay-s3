@@ -48,18 +48,20 @@ var (
 	errInvalidPart = errors.New("invalid part")
 )
 
-// Store is the minimal object-store surface the overlay composes.
+// Store is the minimal object-store surface the overlay composes. Methods
+// taking a size expect the payload length in bytes, or -1 when unknown;
+// stores must then buffer the body themselves to derive a length.
 type Store interface {
 	Get(ctx context.Context, bucket, key string) (io.ReadCloser, *ObjectMeta, error)
 	Head(ctx context.Context, bucket, key string) (*ObjectMeta, error)
-	Put(ctx context.Context, bucket, key string, body io.Reader, contentType string) (*ObjectMeta, error)
+	Put(ctx context.Context, bucket, key string, body io.Reader, size int64, contentType string) (*ObjectMeta, error)
 	List(ctx context.Context, bucket string) ([]ObjectMeta, error)
 	ListBuckets(ctx context.Context) ([]string, error)
 	BucketExists(ctx context.Context, bucket string) (bool, error)
 	CreateBucket(ctx context.Context, bucket string) error
 
 	InitiateMultipart(ctx context.Context, bucket, key, contentType string) (uploadID string, err error)
-	UploadPart(ctx context.Context, bucket, key, uploadID string, partNumber int32, body io.Reader) (etag string, err error)
+	UploadPart(ctx context.Context, bucket, key, uploadID string, partNumber int32, body io.Reader, size int64) (etag string, err error)
 	CompleteMultipart(ctx context.Context, bucket, key, uploadID string, parts []CompletedPart) (*ObjectMeta, error)
 	AbortMultipart(ctx context.Context, bucket, key, uploadID string) error
 	ListParts(ctx context.Context, bucket, key, uploadID string) ([]PartInfo, error)

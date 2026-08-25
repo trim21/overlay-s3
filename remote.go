@@ -188,13 +188,33 @@ func (s *s3Store) Head(ctx context.Context, bucket, key string) (*ObjectMeta, er
 	}, nil
 }
 
-func (s *s3Store) Put(ctx context.Context, bucket, key string, body io.Reader, contentType string) (*ObjectMeta, error) {
+// knownLength returns body and its length: size when declared, otherwise
+// the body buffered into memory so a length can be derived. S3-style
+// backends require Content-Length (or aws-chunked framing) on writes, so
+// the SDK must never send a bare chunked request.
+func knownLength(body io.Reader, size int64) (io.Reader, int64, error) {
+	if size >= 0 {
+		return body, size, nil
+	}
+	data, err := io.ReadAll(body)
+	if err != nil {
+		return nil, 0, err
+	}
+	return bytes.NewReader(data), int64(len(data)), nil
+}
+
+func (s *s3Store) Put(ctx context.Context, bucket, key string, body io.Reader, size int64, contentType string) (*ObjectMeta, error) {
 	b, k := s.mapKey(bucket, key)
+	body, size, err := knownLength(body, size)
+	if err != nil {
+		return nil, err
+	}
 	out, err := s.client.PutObject(ctx, &s3.PutObjectInput{
-		Bucket:      aws.String(b),
-		Key:         aws.String(k),
-		Body:        body,
-		ContentType: aws.String(contentType),
+		Bucket:        aws.String(b),
+		Key:           aws.String(k),
+		Body:          body,
+		ContentLength: aws.Int64(size),
+		ContentType:   aws.String(contentType),
 	})
 	if err != nil {
 		return nil, err
@@ -353,14 +373,19 @@ func (s *s3Store) InitiateMultipart(ctx context.Context, bucket, key, contentTyp
 	return aws.ToString(out.UploadId), nil
 }
 
-func (s *s3Store) UploadPart(ctx context.Context, bucket, key, uploadID string, partNumber int32, body io.Reader) (string, error) {
+func (s *s3Store) UploadPart(ctx context.Context, bucket, key, uploadID string, partNumber int32, body io.Reader, size int64) (string, error) {
 	b, k := s.mapKey(bucket, key)
+	body, size, err := knownLength(body, size)
+	if err != nil {
+		return "", err
+	}
 	out, err := s.client.UploadPart(ctx, &s3.UploadPartInput{
-		Bucket:     aws.String(b),
-		Key:        aws.String(k),
-		UploadId:   aws.String(uploadID),
-		PartNumber: aws.Int32(partNumber),
-		Body:       body,
+		Bucket:        aws.String(b),
+		Key:           aws.String(k),
+		UploadId:      aws.String(uploadID),
+		PartNumber:    aws.Int32(partNumber),
+		Body:          body,
+		ContentLength: aws.Int64(size),
 	})
 	if err != nil {
 		return "", err
