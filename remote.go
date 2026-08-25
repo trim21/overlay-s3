@@ -216,9 +216,8 @@ func (s *s3Store) List(ctx context.Context, bucket string) ([]ObjectMeta, error)
 			return nil, mapS3Error(err)
 		}
 		for _, obj := range resp.Contents {
-			key := aws.ToString(obj.Key)
-			cb, ck, ok := s.unmapKey(key)
-			if !ok || cb != bucket || ck == "" {
+			ck, ok := s.unmap(bucket, aws.ToString(obj.Key))
+			if !ok {
 				continue
 			}
 			out = append(out, ObjectMeta{
@@ -277,6 +276,20 @@ func (s *s3Store) ListBuckets(ctx context.Context) ([]string, error) {
 		token = resp.NextContinuationToken
 	}
 	return buckets, nil
+}
+
+// unmap translates a physical key back into a client object key for the
+// given client bucket; ok is false for keys outside the mapping root,
+// directory markers, and anything else without a usable object key.
+func (s *s3Store) unmap(bucket, key string) (string, bool) {
+	if s.mappedBucket == "" {
+		return key, key != ""
+	}
+	cb, obj, ok := s.unmapKey(key)
+	if !ok || cb != bucket || obj == "" {
+		return "", false
+	}
+	return obj, true
 }
 
 // unmapPrefixRoot recovers the client bucket name from a first-level common
@@ -431,9 +444,8 @@ func (s *s3Store) ListMultipartUploads(ctx context.Context, bucket string) ([]Mu
 			return nil, err
 		}
 		for _, u := range resp.Uploads {
-			ukey := aws.ToString(u.Key)
-			cb, ck, ok := s.unmapKey(ukey)
-			if !ok || cb != bucket || ck == "" {
+			ck, ok := s.unmap(bucket, aws.ToString(u.Key))
+			if !ok {
 				continue
 			}
 			out = append(out, MultipartInfo{
