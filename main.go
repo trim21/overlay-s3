@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"flag"
+	"fmt"
 	"log"
 	"net/http"
 	"os"
@@ -15,32 +16,52 @@ import (
 
 func main() {
 	var (
-		listen          = flag.String("listen", ":8080", "HTTP listen address")
-		localDir        = flag.String("local-dir", "./data", "local overlay storage directory")
-		remoteEndpoint  = flag.String("remote-endpoint", "", "remote S3 endpoint (empty uses AWS)")
-		remoteRegion    = flag.String("remote-region", "us-east-1", "remote S3 region")
-		remoteAccessKey = flag.String("remote-access-key", "", "remote S3 access key")
-		remoteSecretKey = flag.String("remote-secret-key", "", "remote S3 secret key")
-		authKey         = flag.String("auth-key", "", "access key clients must sign with (empty disables signature checks)")
-		authSecret      = flag.String("auth-secret", "", "secret key clients must sign with")
+		listen = flag.String("listen", ":8080", "HTTP listen address")
+
+		overlayEndpoint  = flag.String("overlay-endpoint", "", "overlay S3 endpoint receiving all writes (required)")
+		overlayRegion    = flag.String("overlay-region", "us-east-1", "overlay S3 region")
+		overlayAccessKey = flag.String("overlay-access-key", "", "overlay S3 access key")
+		overlaySecretKey = flag.String("overlay-secret-key", "", "overlay S3 secret key")
+		overlayBucket    = flag.String("overlay-bucket", "", "physical bucket in the overlay S3 holding all data")
+		overlayPrefix    = flag.String("overlay-prefix", "", "key prefix inside the overlay bucket; client bucket b and key k map to prefix/b/k")
+
+		baselineEndpoint  = flag.String("baseline-endpoint", "", "baseline S3 endpoint for read fallback (empty uses AWS)")
+		baselineRegion    = flag.String("baseline-region", "us-east-1", "baseline S3 region")
+		baselineAccessKey = flag.String("baseline-access-key", "", "baseline S3 access key")
+		baselineSecretKey = flag.String("baseline-secret-key", "", "baseline S3 secret key")
+
+		authKey    = flag.String("auth-key", "", "access key clients must sign with (empty disables signature checks)")
+		authSecret = flag.String("auth-secret", "", "secret key clients must sign with")
 	)
 	flag.Parse()
+
+	if *overlayEndpoint == "" || *overlayBucket == "" ||
+		*overlayAccessKey == "" || *overlaySecretKey == "" {
+		fmt.Fprintln(os.Stderr,
+			"-overlay-endpoint, -overlay-bucket, -overlay-access-key and -overlay-secret-key are required")
+		flag.Usage()
+		os.Exit(2)
+	}
 
 	ctx, stop := signal.NotifyContext(context.Background(),
 		os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
-	local, err := newLocalStore(*localDir)
+	overlay, err := newMappedStore(ctx, *overlayEndpoint, *overlayRegion,
+		*overlayAccessKey, *overlaySecretKey, *overlayBucket, *overlayPrefix)
 	if err != nil {
-		log.Fatalf("local store: %v", err)
+		log.Fatalf("overlay store: %v", err)
 	}
-	remote, err := newRemoteStore(ctx, *remoteEndpoint, *remoteRegion,
-		*remoteAccessKey, *remoteSecretKey)
+	if err := overlay.EnsureBucket(ctx); err != nil {
+		log.Fatalf("overlay bucket %s: %v", *overlayBucket, err)
+	}
+	baseline, err := newRemoteStore(ctx, *baselineEndpoint, *baselineRegion,
+		*baselineAccessKey, *baselineSecretKey)
 	if err != nil {
-		log.Fatalf("remote store: %v", err)
+		log.Fatalf("baseline store: %v", err)
 	}
 
-	backend := newOverlayBackend(newOverlayStore(local, remote))
+	backend := newOverlayBackend(newOverlayStore(overlay, baseline))
 	handler := gofakes3.New(backend).Server()
 	if *authKey != "" {
 		handler = sigv4Middleware(handler, *authKey, *authSecret)
@@ -53,12 +74,12 @@ func main() {
 	}
 
 	go func() {
-		remoteLabel := *remoteEndpoint
-		if remoteLabel == "" {
-			remoteLabel = "aws"
+		baselineLabel := *baselineEndpoint
+		if baselineLabel == "" {
+			baselineLabel = "aws"
 		}
-		log.Printf("overlay-s3 listening on %s (local=%s remote=%s)",
-			*listen, *localDir, remoteLabel)
+		log.Printf("overlay-s3 listening on %s (overlay=%s/%s%s baseline=%s)",
+			*listen, *overlayEndpoint, *overlayBucket, *overlayPrefix, baselineLabel)
 		if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 			log.Fatalf("server: %v", err)
 		}

@@ -12,6 +12,5 @@ RUN apk add --no-cache ca-certificates
 COPY --from=builder /out/overlay-s3 /usr/local/bin/overlay-s3
 
 EXPOSE 8080
-VOLUME ["/data"]
 
 ENTRYPOINT ["/usr/local/bin/overlay-s3"]

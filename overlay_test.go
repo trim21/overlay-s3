@@ -15,17 +15,11 @@ func etagOf(data []byte) string {
 	return hex.EncodeToString(h[:])
 }
 
-func newTestOverlay(t *testing.T) (*overlayStore, *localStore, *localStore) {
+func newTestOverlay(t *testing.T) (*overlayStore, *memStore, *memStore) {
 	t.Helper()
-	local, err := newLocalStore(t.TempDir())
-	if err != nil {
-		t.Fatal(err)
-	}
-	remote, err := newLocalStore(t.TempDir())
-	if err != nil {
-		t.Fatal(err)
-	}
-	return newOverlayStore(local, remote), local, remote
+	overlay := newMemStore()
+	baseline := newMemStore()
+	return newOverlayStore(overlay, baseline), overlay, baseline
 }
 
 func TestOverlayGetPrefersLocal(t *testing.T) {
