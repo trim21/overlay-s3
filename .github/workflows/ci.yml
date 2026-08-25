@@ -45,3 +45,7 @@ jobs:
           S3_TEST_ACCESS_KEY: minioadmin
           S3_TEST_SECRET_KEY: minioadmin-secret
           S3_TEST_REGION: us-east-1
+
+      - name: Print silo logs
+        if: failure()
+        run: docker logs silo 2>&1 | tail -200
