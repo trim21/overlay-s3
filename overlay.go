@@ -28,7 +28,6 @@ type cursorState struct {
 	after     string
 	remaining []listEntry
 	done      bool
-	missing   bool // backend answered ErrNotFound: it does not hold the bucket
 }
 
 // listSession holds the resume state of both backends for one paginated
@@ -170,25 +169,26 @@ func mergePageEntries(page ListPage) []listEntry {
 // listCursor streams one backend's listing. It resumes from a cursorState
 // (unconsumed tail + backend token), fetches further pages only once the
 // tail is consumed, and snapshots its position afterwards.
-// listCursor streams one backend's listing. A backend that does not hold
-// the bucket at all streams as empty (the client bucket may live only on the
-// other side); the overlay merge reports NoSuchBucket only when both sides
-// are missing.
+// listCursor streams one backend's listing. tolerateMissing marks the
+// overlay side: a client bucket may legitimately have no overlay prefix yet
+// when it is served from the baseline. The baseline bucket is pre-provisioned
+// and must exist, so its ErrNotFound is a hard error.
 type listCursor struct {
-	store   Store
-	bucket  string
-	p       ListParams
-	after   string
-	entries []listEntry
-	idx     int
-	done    bool
-	missing bool
+	store           Store
+	bucket          string
+	p               ListParams
+	after           string
+	entries         []listEntry
+	idx             int
+	done            bool
+	tolerateMissing bool
 }
 
-func newListCursor(store Store, bucket string, p ListParams, st cursorState) *listCursor {
+func newListCursor(store Store, bucket string, p ListParams, st cursorState, tolerateMissing bool) *listCursor {
 	return &listCursor{
 		store: store, bucket: bucket, p: p,
-		after: st.after, entries: st.remaining, done: st.done, missing: st.missing,
+		after: st.after, entries: st.remaining, done: st.done,
+		tolerateMissing: tolerateMissing,
 	}
 }
 
@@ -203,10 +203,9 @@ func (c *listCursor) load(ctx context.Context) error {
 			MaxKeys:   c.p.MaxKeys,
 		})
 		if err != nil {
-			// a backend that does not hold the bucket at all streams as empty
-			if errors.Is(err, ErrNotFound) {
+			if errors.Is(err, ErrNotFound) && c.tolerateMissing {
+				// no overlay prefix for this client bucket: stream as empty
 				c.done = true
-				c.missing = true
 				return nil
 			}
 			return err
@@ -234,7 +233,7 @@ func (c *listCursor) next() { c.idx++ }
 func (c *listCursor) snapshot() cursorState {
 	rest := make([]listEntry, 0, len(c.entries)-c.idx)
 	rest = append(rest, c.entries[c.idx:]...)
-	return cursorState{after: c.after, remaining: rest, done: c.done, missing: c.missing}
+	return cursorState{after: c.after, remaining: rest, done: c.done}
 }
 
 // ListPage merges the overlay and baseline listings on the fly: both are
@@ -246,8 +245,8 @@ func (o *overlayStore) ListPage(ctx context.Context, bucket string, p ListParams
 		p.MaxKeys = 1000
 	}
 	ovState, bsState := o.sessions.lookup(p.After)
-	oc := newListCursor(o.overlay, bucket, p, ovState)
-	bc := newListCursor(o.baseline, bucket, p, bsState)
+	oc := newListCursor(o.overlay, bucket, p, ovState, true)
+	bc := newListCursor(o.baseline, bucket, p, bsState, false)
 
 	var out ListPage
 	appendEntry := func(e listEntry) {
@@ -285,7 +284,7 @@ func (o *overlayStore) ListPage(ctx context.Context, bucket string, p ListParams
 			appendEntry(be)
 			bc.next()
 		default:
-			return o.finishListPage(ctx, out, oc, bc)
+			return out, nil
 		}
 	}
 
@@ -300,18 +299,6 @@ func (o *overlayStore) ListPage(ctx context.Context, bucket string, p ListParams
 	if more {
 		out.Truncated = true
 		out.NextToken = o.sessions.create(oc.snapshot(), bc.snapshot())
-		return out, nil
-	}
-	if len(out.Objects) == 0 && len(out.CommonPrefixes) == 0 && oc.missing && bc.missing {
-		return ListPage{}, ErrNotFound
-	}
-	return out, nil
-}
-
-// finishListPage handles the empty-page case for the exhausted-both branch.
-func (o *overlayStore) finishListPage(ctx context.Context, out ListPage, oc, bc *listCursor) (ListPage, error) {
-	if len(out.Objects) == 0 && len(out.CommonPrefixes) == 0 && oc.missing && bc.missing {
-		return ListPage{}, ErrNotFound
 	}
 	return out, nil
 }

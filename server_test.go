@@ -112,9 +112,18 @@ func newTestServer(t *testing.T) *httptest.Server {
 	return newTestServerWithAuth(t, "", "")
 }
 
-func newTestServerWithAuth(t *testing.T, key, secret string) *httptest.Server {
+// newTestServerWithAuth builds a gateway over memstore overlay+baseline.
+// baselineBuckets are pre-provisioned on the baseline store, mirroring the
+// production assumption that baseline buckets always exist.
+func newTestServerWithAuth(t *testing.T, key, secret string, baselineBuckets ...string) *httptest.Server {
 	t.Helper()
-	handler := newS3Server(newOverlayStore(newMemStore(), newMemStore()))
+	baseline := newMemStore()
+	for _, b := range baselineBuckets {
+		if err := baseline.CreateBucket(context.Background(), b); err != nil {
+			t.Fatal(err)
+		}
+	}
+	handler := newS3Server(newOverlayStore(newMemStore(), baseline))
 	if key != "" {
 		handler = sigv4Middleware(handler, key, secret)
 	}
@@ -254,7 +263,7 @@ func TestServerHeadObject(t *testing.T) {
 }
 
 func TestServerListObjectsV2(t *testing.T) {
-	ts := newTestServer(t)
+	ts := newTestServerWithAuth(t, "", "", "bucket")
 	createBucket(t, ts.URL+"/bucket")
 	for _, k := range []string{"a", "dir/b", "dir/c"} {
 		resp := putObject(t, ts.URL+"/bucket/"+k, k)

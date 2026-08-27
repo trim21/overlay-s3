@@ -92,7 +92,10 @@ jobs:
           printf 'baseline-content' >/tmp/baseline.txt
           mc cp /tmp/baseline.txt silo/baseline-data/remote.txt
 
-          # create a client-visible bucket through the gateway
+          # create a client-visible bucket through the gateway. The bucket
+          # must pre-exist on the baseline (a pre-provisioned read-only
+          # source); the gateway only adds the overlay prefix
+          mc mb silo/demo
           mc --debug mb gw/demo
 
           # upload through the gateway: lands in the overlay

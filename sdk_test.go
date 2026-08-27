@@ -40,7 +40,7 @@ func newSDKClientForEndpoint(t *testing.T, endpoint, key, secret, region string)
 }
 
 func TestSDKEndToEnd(t *testing.T) {
-	ts := newTestServerWithAuth(t, "AKID", "SECRET")
+	ts := newTestServerWithAuth(t, "AKID", "SECRET", "bucket")
 
 	client := newSDKClient(t, ts, "AKID", "SECRET")
 	ctx := context.Background()
@@ -290,7 +290,7 @@ func TestSDKMultipartEndToEnd(t *testing.T) {
 }
 
 func TestSDKListObjectsPagination(t *testing.T) {
-	ts := newTestServerWithAuth(t, "AKID", "SECRET")
+	ts := newTestServerWithAuth(t, "AKID", "SECRET", "bucket")
 	client := newSDKClient(t, ts, "AKID", "SECRET")
 	ctx := context.Background()
 	if _, err := client.CreateBucket(ctx, &s3.CreateBucketInput{
