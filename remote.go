@@ -229,26 +229,6 @@ func (s *s3Store) Put(ctx context.Context, bucket, key string, body io.Reader, c
 	}, nil
 }
 
-func (s *s3Store) List(ctx context.Context, bucket string) ([]ObjectMeta, error) {
-	var out []ObjectMeta
-	after := ""
-	for {
-		page, err := s.ListPage(ctx, bucket, ListParams{After: after, MaxKeys: 1000})
-		if err != nil {
-			return nil, err
-		}
-		out = append(out, page.Objects...)
-		if !page.Truncated {
-			break
-		}
-		if page.NextToken == "" {
-			return nil, fmt.Errorf("list %s: truncated response without continuation token", bucket)
-		}
-		after = page.NextToken
-	}
-	return out, nil
-}
-
 // ListPage streams one page of a listing, passing prefix, delimiter and the
 // backend's own continuation token through to ListObjectsV2.
 func (s *s3Store) ListPage(ctx context.Context, bucket string, p ListParams) (ListPage, error) {

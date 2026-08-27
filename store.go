@@ -69,7 +69,6 @@ type Store interface {
 	Get(ctx context.Context, bucket, key string) (io.ReadCloser, *ObjectMeta, error)
 	Head(ctx context.Context, bucket, key string) (*ObjectMeta, error)
 	Put(ctx context.Context, bucket, key string, body io.Reader, contentType string) (*ObjectMeta, error)
-	List(ctx context.Context, bucket string) ([]ObjectMeta, error)
 	ListPage(ctx context.Context, bucket string, p ListParams) (ListPage, error)
 	ListBuckets(ctx context.Context) ([]string, error)
 	BucketExists(ctx context.Context, bucket string) (bool, error)

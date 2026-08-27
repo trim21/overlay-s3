@@ -3,7 +3,6 @@ package main
 import (
 	"context"
 	"errors"
-	"fmt"
 	"io"
 	"sort"
 	"strconv"
@@ -127,26 +126,6 @@ func (o *overlayStore) Put(ctx context.Context, bucket, key string, body io.Read
 	return o.overlay.Put(ctx, bucket, key, body, contentType)
 }
 
-func (o *overlayStore) List(ctx context.Context, bucket string) ([]ObjectMeta, error) {
-	var out []ObjectMeta
-	after := ""
-	for {
-		page, err := o.ListPage(ctx, bucket, ListParams{After: after, MaxKeys: 1000})
-		if err != nil {
-			return nil, err
-		}
-		out = append(out, page.Objects...)
-		if !page.Truncated {
-			break
-		}
-		if page.NextToken == "" {
-			return nil, fmt.Errorf("list %s: truncated response without continuation token", bucket)
-		}
-		after = page.NextToken
-	}
-	return out, nil
-}
-
 // mergePageEntries merges the (individually sorted) objects and common
 // prefixes of one backend page into a single key-ordered entry list.
 func mergePageEntries(page ListPage) []listEntry {
@@ -168,11 +147,10 @@ func mergePageEntries(page ListPage) []listEntry {
 
 // listCursor streams one backend's listing. It resumes from a cursorState
 // (unconsumed tail + backend token), fetches further pages only once the
-// tail is consumed, and snapshots its position afterwards.
-// listCursor streams one backend's listing. tolerateMissing marks the
-// overlay side: a client bucket may legitimately have no overlay prefix yet
-// when it is served from the baseline. The baseline bucket is pre-provisioned
-// and must exist, so its ErrNotFound is a hard error.
+// tail is consumed, and snapshots its position afterwards. tolerateMissing
+// marks the overlay side: a client bucket may legitimately have no overlay
+// prefix yet when it is served from the baseline. The baseline bucket is
+// pre-provisioned and must exist, so its ErrNotFound is a hard error.
 type listCursor struct {
 	store           Store
 	bucket          string
@@ -288,12 +266,13 @@ func (o *overlayStore) ListPage(ctx context.Context, bucket string, p ListParams
 		}
 	}
 
-	more := false
-	for _, c := range []*listCursor{oc, bc} {
-		if _, has, err := c.peek(ctx); err != nil {
+	_, more, err := oc.peek(ctx)
+	if err != nil {
+		return ListPage{}, err
+	}
+	if !more {
+		if _, more, err = bc.peek(ctx); err != nil {
 			return ListPage{}, err
-		} else if has {
-			more = true
 		}
 	}
 	if more {

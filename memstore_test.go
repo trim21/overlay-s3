@@ -107,7 +107,7 @@ func (s *memStore) Head(ctx context.Context, bucket, key string) (*ObjectMeta, e
 	}, nil
 }
 
-func (s *memStore) List(ctx context.Context, bucket string) ([]ObjectMeta, error) {
+func (s *memStore) listAll(ctx context.Context, bucket string) ([]ObjectMeta, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if !s.buckets[bucket] {
@@ -128,7 +128,7 @@ func (s *memStore) List(ctx context.Context, bucket string) ([]ObjectMeta, error
 }
 
 func (s *memStore) ListPage(ctx context.Context, bucket string, p ListParams) (ListPage, error) {
-	objs, err := s.List(ctx, bucket)
+	objs, err := s.listAll(ctx, bucket)
 	if err != nil {
 		return ListPage{}, err
 	}

@@ -111,7 +111,7 @@ func TestOverlayHeadFallback(t *testing.T) {
 
 func TestOverlayListMissingBucket(t *testing.T) {
 	ov, _, _ := newTestOverlay(t)
-	if _, err := ov.List(context.Background(), "no-such-bucket"); !errors.Is(err, ErrNotFound) {
+	if _, err := ov.ListPage(context.Background(), "no-such-bucket", ListParams{}); !errors.Is(err, ErrNotFound) {
 		t.Fatalf("expected ErrNotFound, got %v", err)
 	}
 }
@@ -129,19 +129,19 @@ func TestOverlayListMerges(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	objs, err := ov.List(context.Background(), "bucket")
+	objs, err := ov.ListPage(context.Background(), "bucket", ListParams{})
 	if err != nil {
 		t.Fatal(err)
 	}
 	var keys []string
-	for _, o := range objs {
+	for _, o := range objs.Objects {
 		keys = append(keys, o.Key)
 	}
 	if strings.Join(keys, ",") != "a,b,c,d" {
 		t.Fatalf("unexpected merge order: %v", keys)
 	}
-	if objs[0].ETag != etagOf([]byte("local-a")) {
-		t.Fatalf("local etag should win for key a, got %s", objs[0].ETag)
+	if objs.Objects[0].ETag != etagOf([]byte("local-a")) {
+		t.Fatalf("local etag should win for key a, got %s", objs.Objects[0].ETag)
 	}
 }
 
