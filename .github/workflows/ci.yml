@@ -93,11 +93,11 @@ jobs:
           mc cp /tmp/baseline.txt silo/baseline-data/remote.txt
 
           # create a client-visible bucket through the gateway
-          mc mb gw/demo
+          mc --debug mb gw/demo
 
           # upload through the gateway: lands in the overlay
           printf 'hello-from-mc' >/tmp/up.txt
-          mc cp /tmp/up.txt gw/demo/up.txt
+          mc --debug cp /tmp/up.txt gw/demo/up.txt
 
           # listing through the gateway shows the overlay write
           mc ls gw/demo | grep 'up\.txt'
@@ -125,3 +125,7 @@ jobs:
       - name: Print silo logs
         if: failure()
         run: docker logs silo 2>&1 | tail -200
+
+      - name: Print overlay-s3 gateway logs
+        if: failure()
+        run: cat /tmp/overlay-s3.log 2>/dev/null | tail -200 || true

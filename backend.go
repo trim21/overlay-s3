@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/johannesboyne/gofakes3"
+	zlog "github.com/rs/zerolog/log"
 )
 
 // overlayBackend adapts the overlay Store to gofakes3's Backend and
@@ -31,9 +32,19 @@ func notSupported(what string) error {
 		what+" not supported")
 }
 
+func logStoreError(op, bucket, key string, err error) {
+	zlog.Error().
+		Str("op", op).
+		Str("bucket", bucket).
+		Str("key", key).
+		Err(err).
+		Msg("store operation failed")
+}
+
 func (b *overlayBackend) ListBuckets() ([]gofakes3.BucketInfo, error) {
 	names, err := b.store.ListBuckets(context.Background())
 	if err != nil {
+		logStoreError("list-buckets", "", "", err)
 		return nil, err
 	}
 	out := make([]gofakes3.BucketInfo, 0, len(names))
@@ -49,6 +60,7 @@ func (b *overlayBackend) ListBuckets() ([]gofakes3.BucketInfo, error) {
 func (b *overlayBackend) ListBucket(name string, prefix *gofakes3.Prefix, page gofakes3.ListBucketPage) (*gofakes3.ObjectList, error) {
 	objs, err := b.store.List(context.Background(), name)
 	if err != nil {
+		logStoreError("list", name, "", err)
 		return nil, err
 	}
 	if prefix == nil {
@@ -107,13 +119,18 @@ func (b *overlayBackend) ListBucket(name string, prefix *gofakes3.Prefix, page g
 
 func (b *overlayBackend) CreateBucket(name string) error {
 	if err := b.store.CreateBucket(context.Background(), name); err != nil {
+		logStoreError("create-bucket", name, "", err)
 		return err
 	}
 	return nil
 }
 
 func (b *overlayBackend) BucketExists(name string) (bool, error) {
-	return b.store.BucketExists(context.Background(), name)
+	ok, err := b.store.BucketExists(context.Background(), name)
+	if err != nil {
+		logStoreError("bucket-exists", name, "", err)
+	}
+	return ok, err
 }
 
 func (b *overlayBackend) DeleteBucket(name string) error {
@@ -154,6 +171,7 @@ func (b *overlayBackend) GetObject(bucketName, objectName string, rng *gofakes3.
 		return nil, gofakes3.KeyNotFound(objectName)
 	}
 	if err != nil {
+		logStoreError("get", bucketName, objectName, err)
 		return nil, err
 	}
 	hash, err := etagToHash(meta.ETag)
@@ -193,6 +211,7 @@ func (b *overlayBackend) HeadObject(bucketName, objectName string) (*gofakes3.Ob
 		return nil, gofakes3.KeyNotFound(objectName)
 	}
 	if err != nil {
+		logStoreError("head", bucketName, objectName, err)
 		return nil, err
 	}
 	hash, err := etagToHash(meta.ETag)
@@ -219,11 +238,16 @@ func (b *overlayBackend) PutObject(bucketName, key string, meta map[string]strin
 				return gofakes3.PutObjectResult{}, gofakes3.ErrorMessage(
 					gofakes3.ErrPreconditionFailed, "object already exists")
 			} else if err != ErrNotFound {
+				logStoreError("put-if-none-match", bucketName, key, err)
 				return gofakes3.PutObjectResult{}, err
 			}
 		}
 		if conditions.IfMatch != nil {
 			existing, err := b.store.Head(context.Background(), bucketName, key)
+			if err != nil && err != ErrNotFound {
+				logStoreError("put-if-match", bucketName, key, err)
+				return gofakes3.PutObjectResult{}, err
+			}
 			if err == ErrNotFound ||
 				existing.ETag != strings.Trim(*conditions.IfMatch, `"`) {
 				return gofakes3.PutObjectResult{}, gofakes3.ErrorMessage(
@@ -236,6 +260,7 @@ func (b *overlayBackend) PutObject(bucketName, key string, meta map[string]strin
 		contentType = "binary/octet-stream"
 	}
 	if _, err := b.store.Put(context.Background(), bucketName, key, input, contentType); err != nil {
+		logStoreError("put", bucketName, key, err)
 		return gofakes3.PutObjectResult{}, err
 	}
 	return gofakes3.PutObjectResult{}, nil
@@ -251,6 +276,7 @@ func (b *overlayBackend) CopyObject(srcBucket, srcKey, dstBucket, dstKey string,
 		return gofakes3.CopyObjectResult{}, gofakes3.KeyNotFound(srcKey)
 	}
 	if err != nil {
+		logStoreError("copy-get", srcBucket, srcKey, err)
 		return gofakes3.CopyObjectResult{}, err
 	}
 	defer rc.Close()
@@ -260,6 +286,7 @@ func (b *overlayBackend) CopyObject(srcBucket, srcKey, dstBucket, dstKey string,
 	}
 	dstMeta, err := b.store.Put(context.Background(), dstBucket, dstKey, rc, contentType)
 	if err != nil {
+		logStoreError("copy-put", dstBucket, dstKey, err)
 		return gofakes3.CopyObjectResult{}, err
 	}
 	return gofakes3.CopyObjectResult{
@@ -275,14 +302,20 @@ func (b *overlayBackend) CreateMultipartUpload(bucket, object string, meta map[s
 	}
 	id, err := b.store.InitiateMultipart(context.Background(), bucket, object, contentType)
 	if err != nil {
+		logStoreError("initiate-multipart", bucket, object, err)
 		return "", err
 	}
 	return gofakes3.UploadID(id), nil
 }
 
 func (b *overlayBackend) UploadPart(bucket, object string, id gofakes3.UploadID, partNumber int, contentLength int64, input io.Reader) (string, error) {
-	return b.store.UploadPart(context.Background(), bucket, object, string(id),
+	etag, err := b.store.UploadPart(context.Background(), bucket, object, string(id),
 		int32(partNumber), input)
+	if err != nil {
+		logStoreError("upload-part", bucket, object, err)
+		return "", err
+	}
+	return etag, nil
 }
 
 func (b *overlayBackend) CompleteMultipartUpload(bucket, object string, id gofakes3.UploadID, input *gofakes3.CompleteMultipartUploadRequest) (gofakes3.VersionID, string, error) {
@@ -292,6 +325,7 @@ func (b *overlayBackend) CompleteMultipartUpload(bucket, object string, id gofak
 	}
 	meta, err := b.store.CompleteMultipart(context.Background(), bucket, object, string(id), parts)
 	if err != nil {
+		logStoreError("complete-multipart", bucket, object, err)
 		if errors.Is(err, errUploadNotFound) {
 			return "", "", gofakes3.ErrorMessage(gofakes3.ErrNoSuchUpload,
 				"The specified multipart upload does not exist")
@@ -307,6 +341,9 @@ func (b *overlayBackend) CompleteMultipartUpload(bucket, object string, id gofak
 
 func (b *overlayBackend) AbortMultipartUpload(bucket, object string, id gofakes3.UploadID) error {
 	err := b.store.AbortMultipart(context.Background(), bucket, object, string(id))
+	if err != nil {
+		logStoreError("abort-multipart", bucket, object, err)
+	}
 	if errors.Is(err, errUploadNotFound) {
 		return gofakes3.ErrorMessage(gofakes3.ErrNoSuchUpload,
 			"The specified multipart upload does not exist")
@@ -317,6 +354,7 @@ func (b *overlayBackend) AbortMultipartUpload(bucket, object string, id gofakes3
 func (b *overlayBackend) ListParts(bucket, object string, uploadID gofakes3.UploadID, marker int, limit int64) (*gofakes3.ListMultipartUploadPartsResult, error) {
 	parts, err := b.store.ListParts(context.Background(), bucket, object, string(uploadID))
 	if err != nil {
+		logStoreError("list-parts", bucket, object, err)
 		if errors.Is(err, errUploadNotFound) {
 			return nil, gofakes3.ErrorMessage(gofakes3.ErrNoSuchUpload,
 				"The specified multipart upload does not exist")
@@ -359,6 +397,7 @@ func (b *overlayBackend) ListParts(bucket, object string, uploadID gofakes3.Uplo
 func (b *overlayBackend) ListMultipartUploads(bucket string, marker *gofakes3.UploadListMarker, prefix gofakes3.Prefix, limit int64) (*gofakes3.ListMultipartUploadsResult, error) {
 	uploads, err := b.store.ListMultipartUploads(context.Background(), bucket)
 	if err != nil {
+		logStoreError("list-multipart-uploads", bucket, "", err)
 		return nil, err
 	}
 	result := &gofakes3.ListMultipartUploadsResult{

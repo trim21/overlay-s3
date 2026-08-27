@@ -4,7 +4,6 @@ import (
 	"context"
 	"flag"
 	"fmt"
-	"log"
 	"net/http"
 	"os"
 	"os/signal"
@@ -12,6 +11,7 @@ import (
 	"time"
 
 	"github.com/johannesboyne/gofakes3"
+	zlog "github.com/rs/zerolog/log"
 )
 
 func main() {
@@ -52,19 +52,19 @@ func main() {
 	overlay, err := newMappedStore(ctx, *overlayEndpoint, *overlayRegion,
 		*overlayAccessKey, *overlaySecretKey, *overlayBucket, *overlayPrefix, *overlayPathStyle)
 	if err != nil {
-		log.Fatalf("overlay store: %v", err)
+		zlog.Fatal().Err(err).Msg("create overlay store")
 	}
 	if err := overlay.EnsureBucket(ctx); err != nil {
-		log.Fatalf("overlay bucket %s: %v", *overlayBucket, err)
+		zlog.Fatal().Err(err).Str("bucket", *overlayBucket).Msg("ensure overlay bucket")
 	}
 	baseline, err := newRemoteStore(ctx, *baselineEndpoint, *baselineRegion,
 		*baselineAccessKey, *baselineSecretKey, *baselinePathStyle)
 	if err != nil {
-		log.Fatalf("baseline store: %v", err)
+		zlog.Fatal().Err(err).Msg("create baseline store")
 	}
 
 	backend := newOverlayBackend(newOverlayStore(overlay, baseline))
-	handler := gofakes3.New(backend).Server()
+	handler := gofakes3.New(backend, gofakes3.WithLogger(newGofakes3Log())).Server()
 	if *authKey != "" {
 		handler = sigv4Middleware(handler, *authKey, *authSecret)
 	}
@@ -80,10 +80,10 @@ func main() {
 		if baselineLabel == "" {
 			baselineLabel = "aws"
 		}
-		log.Printf("overlay-s3 listening on %s (overlay=%s/%s%s baseline=%s)",
+		zlog.Info().Msgf("overlay-s3 listening on %s (overlay=%s/%s%s baseline=%s)",
 			*listen, *overlayEndpoint, *overlayBucket, *overlayPrefix, baselineLabel)
 		if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
-			log.Fatalf("server: %v", err)
+			zlog.Fatal().Err(err).Msg("server")
 		}
 	}()
 

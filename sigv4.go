@@ -15,6 +15,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	zlog "github.com/rs/zerolog/log"
 )
 
 const (
@@ -31,6 +33,14 @@ const (
 func sigv4Middleware(next http.Handler, accessKey, secretKey string) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if err := verifySigV4(r, accessKey, secretKey); err != nil {
+			cred, signed := authFields(r)
+			zlog.Error().
+				Str("method", r.Method).
+				Str("path", r.URL.Path).
+				Str("credential", cred).
+				Str("signed_headers", signed).
+				Err(err).
+				Msg("sigv4 verification failed")
 			writeSigError(w, http.StatusForbidden, "SignatureDoesNotMatch",
 				err.Error(), r.URL.Path)
 			return
@@ -45,6 +55,28 @@ func sigv4Middleware(next http.Handler, accessKey, secretKey string) http.Handle
 		}
 		next.ServeHTTP(w, r)
 	})
+}
+
+// authFields returns the Credential and SignedHeaders values from a SigV4
+// Authorization header for logging; the signature itself is never logged.
+func authFields(r *http.Request) (cred, signed string) {
+	auth := r.Header.Get("Authorization")
+	if !strings.HasPrefix(auth, awsAlgorithm+" ") {
+		return "", ""
+	}
+	for _, kv := range strings.Split(strings.TrimPrefix(auth, awsAlgorithm+" "), ", ") {
+		k, v, ok := strings.Cut(kv, "=")
+		if !ok {
+			continue
+		}
+		switch k {
+		case "Credential":
+			cred = v
+		case "SignedHeaders":
+			signed = v
+		}
+	}
+	return cred, signed
 }
 
 type sigError struct {
@@ -87,6 +119,7 @@ func (v *hashVerifyingReader) Read(p []byte) (int, error) {
 		v.h.Write(p[:n])
 	}
 	if err == io.EOF && hex.EncodeToString(v.h.Sum(nil)) != v.expected {
+		zlog.Error().Msg("payload hash mismatch")
 		return n, errPayloadHashMismatch
 	}
 	return n, err
