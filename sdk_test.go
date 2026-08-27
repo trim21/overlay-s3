@@ -15,7 +15,6 @@ import (
 	"github.com/aws/aws-sdk-go-v2/service/s3"
 	"github.com/aws/aws-sdk-go-v2/service/s3/types"
 	"github.com/aws/smithy-go"
-	"github.com/johannesboyne/gofakes3"
 )
 
 func newSDKClient(t *testing.T, ts *httptest.Server, key, secret string) *s3.Client {
@@ -240,9 +239,8 @@ func TestSDKMultipartEndToEnd(t *testing.T) {
 	}
 	completeETag := aws.ToString(comp.ETag)
 	getETag := aws.ToString(got.ETag)
-	// gofakes3 cannot express the "-N" multipart suffix on GET/HEAD, so the
-	// GET etag is the combined digest alone
-	if strings.Trim(completeETag, `"`) != strings.Trim(getETag, `"`)+"-2" {
+	// S3 returns the full "digest-N" multipart ETag on GET/HEAD as well
+	if strings.Trim(completeETag, `"`) != strings.Trim(getETag, `"`) {
 		t.Fatalf("complete etag = %q, get etag = %q", completeETag, getETag)
 	}
 
@@ -344,8 +342,7 @@ func TestSDKListObjectsPaginationMerged(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	handler := gofakes3.New(newOverlayBackend(
-		newOverlayStore(newMemStore(), baseline))).Server()
+	handler := newS3Server(newOverlayStore(newMemStore(), baseline))
 	handler = sigv4Middleware(handler, "AKID", "SECRET")
 	ts := httptest.NewServer(handler)
 	t.Cleanup(ts.Close)
@@ -393,8 +390,7 @@ func TestSDKProxyFallback(t *testing.T) {
 	if _, err := baseline.Put(ctx, "bucket", "proxy-key", strings.NewReader("remote-data"), "text/plain"); err != nil {
 		t.Fatal(err)
 	}
-	handler := gofakes3.New(newOverlayBackend(
-		newOverlayStore(newMemStore(), baseline))).Server()
+	handler := newS3Server(newOverlayStore(newMemStore(), baseline))
 	handler = sigv4Middleware(handler, "AKID", "SECRET")
 	ts := httptest.NewServer(handler)
 	t.Cleanup(ts.Close)

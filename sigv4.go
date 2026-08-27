@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bufio"
 	"crypto/hmac"
 	"crypto/sha256"
 	"encoding/hex"
@@ -46,13 +47,29 @@ func sigv4Middleware(next http.Handler, accessKey, secretKey string) http.Handle
 				err.Error(), r.URL.Path)
 			return
 		}
-		if payloadHash := r.Header.Get("x-amz-content-sha256"); payloadHash != "" &&
-			payloadHash != unsignedPayload && len(payloadHash) == 64 {
-			r.Body = io.NopCloser(&hashVerifyingReader{
-				r:        r.Body,
-				h:        sha256.New(),
-				expected: payloadHash,
-			})
+		payloadHash := r.Header.Get("x-amz-content-sha256")
+		switch payloadHash {
+		case streamingPayload:
+			decoded, err := strconv.ParseInt(r.Header.Get("x-amz-decoded-content-length"), 10, 64)
+			if err != nil || decoded < 0 {
+				writeSigError(w, http.StatusBadRequest, "InvalidRequest",
+					"missing or invalid x-amz-decoded-content-length", r.URL.Path)
+				return
+			}
+			r.Body = io.NopCloser(newAwsChunkedReader(r.Body))
+			r.ContentLength = decoded
+			r.Header.Set("Content-Length", strconv.FormatInt(decoded, 10))
+			r.Header.Del("x-amz-content-sha256")
+		case "", unsignedPayload:
+			// no payload verification
+		default:
+			if len(payloadHash) == 64 {
+				r.Body = io.NopCloser(&hashVerifyingReader{
+					r:        r.Body,
+					h:        sha256.New(),
+					expected: payloadHash,
+				})
+			}
 		}
 		next.ServeHTTP(w, r)
 	})
@@ -104,6 +121,65 @@ func writeSigError(w http.ResponseWriter, status int, code, message, resource st
 // errPayloadHashMismatch is returned by hashVerifyingReader when the streamed
 // payload does not match the signed hash.
 var errPayloadHashMismatch = errors.New("payload hash mismatch")
+
+// awsChunkedReader decodes the aws-chunked body framing used with
+// STREAMING-AWS4-HMAC-SHA256-PAYLOAD signatures: each chunk is
+// "<hex-size>[;chunk-signature=...]\r\n<data>\r\n", terminated by a
+// zero-size chunk. Per-chunk signatures are not verified; the outer
+// SigV4 signature already authenticates the request.
+type awsChunkedReader struct {
+	br        *bufio.Reader
+	remaining int64
+	done      bool
+}
+
+func newAwsChunkedReader(r io.Reader) *awsChunkedReader {
+	return &awsChunkedReader{br: bufio.NewReader(r)}
+}
+
+func (c *awsChunkedReader) Read(p []byte) (int, error) {
+	for {
+		if c.done {
+			return 0, io.EOF
+		}
+		if c.remaining == 0 {
+			line, err := c.br.ReadString('\n')
+			if err != nil {
+				return 0, err
+			}
+			header := strings.TrimSuffix(strings.TrimSuffix(line, "\n"), "\r")
+			sizeHex, _, _ := strings.Cut(header, ";")
+			size, err := strconv.ParseInt(sizeHex, 16, 64)
+			if err != nil {
+				return 0, fmt.Errorf("aws-chunked: invalid chunk size %q", sizeHex)
+			}
+			if size == 0 {
+				c.done = true
+				return 0, io.EOF
+			}
+			c.remaining = size
+			continue
+		}
+		want := int64(len(p))
+		if c.remaining < want {
+			want = c.remaining
+		}
+		n, err := c.br.Read(p[:int(want)])
+		c.remaining -= int64(n)
+		if err != nil {
+			if err == io.EOF && c.remaining == 0 {
+				return n, io.ErrUnexpectedEOF
+			}
+			return n, err
+		}
+		if c.remaining == 0 {
+			if _, err := c.br.Discard(2); err != nil { // trailing \r\n
+				return n, err
+			}
+		}
+		return n, nil
+	}
+}
 
 // hashVerifyingReader computes the payload hash while streaming and fails
 // with io.EOF replaced by errPayloadHashMismatch when it does not match the

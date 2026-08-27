@@ -10,7 +10,6 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/johannesboyne/gofakes3"
 	zlog "github.com/rs/zerolog/log"
 )
 
@@ -63,8 +62,8 @@ func main() {
 		zlog.Fatal().Err(err).Msg("create baseline store")
 	}
 
-	backend := newOverlayBackend(newOverlayStore(overlay, baseline))
-	handler := gofakes3.New(backend, gofakes3.WithLogger(newGofakes3Log())).Server()
+	backend := newOverlayStore(overlay, baseline)
+	handler := newS3Server(backend)
 	if *authKey != "" {
 		handler = sigv4Middleware(handler, *authKey, *authSecret)
 	}

@@ -15,7 +15,6 @@ import (
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
 	"github.com/aws/aws-sdk-go-v2/service/s3/types"
-	"github.com/johannesboyne/gofakes3"
 )
 
 // These tests exercise the overlay semantics against a real S3 backend.
@@ -115,8 +114,7 @@ func purgeBucket(t *testing.T, client *s3.Client, bucket string) {
 
 func (s *integrationStores) startGateway(t *testing.T) *s3.Client {
 	t.Helper()
-	handler := gofakes3.New(newOverlayBackend(
-		newOverlayStore(s.overlay, s.baseline))).Server()
+	handler := newS3Server(newOverlayStore(s.overlay, s.baseline))
 	handler = sigv4Middleware(handler, "test", "test-secret")
 	ts := httptest.NewServer(handler)
 	t.Cleanup(ts.Close)

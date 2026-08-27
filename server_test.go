@@ -13,7 +13,6 @@ import (
 
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/aws/signer/v4"
-	"github.com/johannesboyne/gofakes3"
 )
 
 func sha256hex(s string) string {
@@ -115,8 +114,7 @@ func newTestServer(t *testing.T) *httptest.Server {
 
 func newTestServerWithAuth(t *testing.T, key, secret string) *httptest.Server {
 	t.Helper()
-	handler := gofakes3.New(newOverlayBackend(
-		newOverlayStore(newMemStore(), newMemStore()))).Server()
+	handler := newS3Server(newOverlayStore(newMemStore(), newMemStore()))
 	if key != "" {
 		handler = sigv4Middleware(handler, key, secret)
 	}
