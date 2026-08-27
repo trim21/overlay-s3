@@ -127,6 +127,60 @@ func (s *memStore) List(ctx context.Context, bucket string) ([]ObjectMeta, error
 	return out, nil
 }
 
+func (s *memStore) ListPage(ctx context.Context, bucket string, p ListParams) (ListPage, error) {
+	objs, err := s.List(ctx, bucket)
+	if err != nil {
+		return ListPage{}, err
+	}
+	if p.MaxKeys <= 0 {
+		p.MaxKeys = 1000
+	}
+	var out ListPage
+	seenPrefixes := map[string]bool{}
+	skipAfter := func(key string) bool {
+		if key <= p.After {
+			return true
+		}
+		// a common-prefix token also covers everything below it
+		return strings.HasSuffix(p.After, "/") && strings.HasPrefix(key, p.After)
+	}
+	for _, o := range objs {
+		if skipAfter(o.Key) || !strings.HasPrefix(o.Key, p.Prefix) {
+			continue
+		}
+		if p.Delimiter != "" {
+			if i := strings.Index(o.Key[len(p.Prefix):], p.Delimiter); i >= 0 {
+				cp := o.Key[:len(p.Prefix)+i+len(p.Delimiter)]
+				if !seenPrefixes[cp] {
+					seenPrefixes[cp] = true
+					out.CommonPrefixes = append(out.CommonPrefixes, cp)
+					if len(out.Objects)+len(out.CommonPrefixes) >= p.MaxKeys {
+						out.Truncated = true
+						break
+					}
+				}
+				continue
+			}
+		}
+		out.Objects = append(out.Objects, o)
+		if len(out.Objects)+len(out.CommonPrefixes) >= p.MaxKeys {
+			out.Truncated = true
+			break
+		}
+	}
+	if out.Truncated {
+		last := ""
+		if n := len(out.Objects); n > 0 {
+			last = out.Objects[n-1].Key
+		}
+		if n := len(out.CommonPrefixes); n > 0 {
+			last = out.CommonPrefixes[n-1]
+		}
+		out.NextToken = last
+	}
+	return out, nil
+}
+
 func (s *memStore) ListBuckets(ctx context.Context) ([]string, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()

@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"io"
 	"net/http"
-	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -175,88 +174,50 @@ func (s *s3Server) handleBucketMeta(w http.ResponseWriter, r *http.Request, buck
 
 func (s *s3Server) handleListObjectsV2(w http.ResponseWriter, r *http.Request, bucket string) error {
 	q := r.URL.Query()
-	prefix := q.Get("prefix")
-	delimiter := q.Get("delimiter")
-	continuationToken := q.Get("continuation-token")
-	maxKeys := 1000
+	p := ListParams{
+		Prefix:    q.Get("prefix"),
+		Delimiter: q.Get("delimiter"),
+		After:     q.Get("continuation-token"),
+		MaxKeys:   1000,
+	}
 	if v := q.Get("max-keys"); v != "" {
 		n, err := strconv.Atoi(v)
 		if err != nil || n < 0 {
 			return &s3Error{http.StatusBadRequest, "InvalidArgument", "max-keys"}
 		}
-		maxKeys = n
+		p.MaxKeys = n
 	}
 
-	objs, err := s.store.List(r.Context(), bucket)
+	page, err := s.store.ListPage(r.Context(), bucket, p)
 	if err != nil {
 		return noSuchBucket(err)
 	}
 
-	type item struct {
-		key    string
-		prefix bool
-		obj    objectEntry
+	res := listBucketResult{
+		Xmlns:             s3NS,
+		Name:              bucket,
+		Prefix:            p.Prefix,
+		Delimiter:         p.Delimiter,
+		KeyCount:          len(page.Objects) + len(page.CommonPrefixes),
+		MaxKeys:           p.MaxKeys,
+		IsTruncated:       page.Truncated,
+		ContinuationToken: p.After,
 	}
-	var items []item
-	seen := map[string]bool{}
-	for _, o := range objs {
-		if !strings.HasPrefix(o.Key, prefix) {
-			continue
-		}
-		if delimiter != "" {
-			if i := strings.Index(o.Key[len(prefix):], delimiter); i >= 0 {
-				cp := o.Key[:len(prefix)+i+len(delimiter)]
-				if !seen[cp] {
-					seen[cp] = true
-					items = append(items, item{key: cp, prefix: true})
-				}
-				continue
-			}
-		}
-		items = append(items, item{
-			key: o.Key,
-			obj: objectEntry{
-				Key:          o.Key,
-				LastModified: rfc3339(o.LastModified),
-				ETag:         `"` + o.ETag + `"`,
-				Size:         o.Size,
-				StorageClass: "STANDARD",
-			},
+	for i := range page.Objects {
+		o := page.Objects[i]
+		res.Contents = append(res.Contents, objectEntry{
+			Key:          o.Key,
+			LastModified: rfc3339(o.LastModified),
+			ETag:         `"` + o.ETag + `"`,
+			Size:         o.Size,
+			StorageClass: "STANDARD",
 		})
 	}
-	sort.Slice(items, func(i, j int) bool { return items[i].key < items[j].key })
-
-	start := 0
-	if continuationToken != "" {
-		for start < len(items) && items[start].key <= continuationToken {
-			start++
-		}
+	for _, cp := range page.CommonPrefixes {
+		res.CommonPrefixes = append(res.CommonPrefixes, commonPrefix{Prefix: cp})
 	}
-	end := len(items)
-	if maxKeys > 0 && end-start > maxKeys {
-		end = start + maxKeys
-	}
-	page := items[start:end]
-
-	res := listBucketResult{
-		Xmlns:            s3NS,
-		Name:             bucket,
-		Prefix:           prefix,
-		Delimiter:        delimiter,
-		KeyCount:         len(page),
-		MaxKeys:          maxKeys,
-		ContinuationToken: continuationToken,
-	}
-	for _, it := range page {
-		if it.prefix {
-			res.CommonPrefixes = append(res.CommonPrefixes, commonPrefix{Prefix: it.key})
-		} else {
-			res.Contents = append(res.Contents, it.obj)
-		}
-	}
-	if end < len(items) {
-		res.IsTruncated = true
-		res.NextContinuationToken = page[len(page)-1].key
+	if page.Truncated {
+		res.NextContinuationToken = page.NextToken
 	}
 	writeXML(w, http.StatusOK, res)
 	return nil

@@ -230,38 +230,70 @@ func (s *s3Store) Put(ctx context.Context, bucket, key string, body io.Reader, c
 }
 
 func (s *s3Store) List(ctx context.Context, bucket string) ([]ObjectMeta, error) {
-	b, _ := s.mapKey(bucket, "")
-	prefix := s.listPrefix(bucket)
 	var out []ObjectMeta
-	var token *string
+	after := ""
 	for {
-		resp, err := s.client.ListObjectsV2(ctx, &s3.ListObjectsV2Input{
-			Bucket:            aws.String(b),
-			Prefix:            aws.String(prefix),
-			ContinuationToken: token,
-		})
+		page, err := s.ListPage(ctx, bucket, ListParams{After: after, MaxKeys: 1000})
 		if err != nil {
-			return nil, mapS3Error(err)
+			return nil, err
 		}
-		for _, obj := range resp.Contents {
-			ck, ok := s.unmap(bucket, aws.ToString(obj.Key))
-			if !ok {
-				continue
-			}
-			out = append(out, ObjectMeta{
-				Key:          ck,
-				Size:         aws.ToInt64(obj.Size),
-				ETag:         strings.Trim(aws.ToString(obj.ETag), `"`),
-				LastModified: aws.ToTime(obj.LastModified),
-			})
-		}
-		if resp.IsTruncated == nil || !*resp.IsTruncated {
+		out = append(out, page.Objects...)
+		if !page.Truncated {
 			break
 		}
-		token = resp.NextContinuationToken
-		if token == nil {
-			return nil, fmt.Errorf("list %s/%s: truncated response without continuation token", b, prefix)
+		if page.NextToken == "" {
+			return nil, fmt.Errorf("list %s: truncated response without continuation token", bucket)
 		}
+		after = page.NextToken
+	}
+	return out, nil
+}
+
+// ListPage streams one page of a listing, passing prefix, delimiter and the
+// backend's own continuation token through to ListObjectsV2.
+func (s *s3Store) ListPage(ctx context.Context, bucket string, p ListParams) (ListPage, error) {
+	if p.MaxKeys <= 0 {
+		p.MaxKeys = 1000
+	}
+	b, _ := s.mapKey(bucket, "")
+	in := &s3.ListObjectsV2Input{
+		Bucket:  aws.String(b),
+		Prefix:  aws.String(joinKey(s.listPrefix(bucket), p.Prefix)),
+		MaxKeys: aws.Int32(int32(p.MaxKeys)),
+	}
+	if p.Delimiter != "" {
+		in.Delimiter = aws.String(p.Delimiter)
+	}
+	if p.After != "" {
+		in.ContinuationToken = aws.String(p.After)
+	}
+	resp, err := s.client.ListObjectsV2(ctx, in)
+	if err != nil {
+		return ListPage{}, mapS3Error(err)
+	}
+	var out ListPage
+	for _, obj := range resp.Contents {
+		ck, ok := s.unmap(bucket, aws.ToString(obj.Key))
+		if !ok {
+			continue
+		}
+		out.Objects = append(out.Objects, ObjectMeta{
+			Key:          ck,
+			Size:         aws.ToInt64(obj.Size),
+			ETag:         strings.Trim(aws.ToString(obj.ETag), `"`),
+			LastModified: aws.ToTime(obj.LastModified),
+		})
+	}
+	for _, cp := range resp.CommonPrefixes {
+		pfx, ok := s.unmap(bucket, aws.ToString(cp.Prefix))
+		if !ok {
+			continue
+		}
+		out.CommonPrefixes = append(out.CommonPrefixes, pfx)
+	}
+	out.Truncated = aws.ToBool(resp.IsTruncated)
+	if out.Truncated {
+		out.NextToken = aws.ToString(resp.NextContinuationToken)
 	}
 	return out, nil
 }

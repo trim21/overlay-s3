@@ -48,12 +48,29 @@ var (
 	errInvalidPart = errors.New("invalid part")
 )
 
+// ListParams describes one page of a paginated listing.
+type ListParams struct {
+	Prefix    string
+	Delimiter string
+	After     string // resume position (opaque); empty starts from the beginning
+	MaxKeys   int    // max entries (objects + common prefixes) per page
+}
+
+// ListPage is one page of a paginated listing in key order.
+type ListPage struct {
+	Objects        []ObjectMeta
+	CommonPrefixes []string
+	Truncated      bool
+	NextToken      string // opaque resume position; meaningful when Truncated
+}
+
 // Store is the minimal object-store surface the overlay composes.
 type Store interface {
 	Get(ctx context.Context, bucket, key string) (io.ReadCloser, *ObjectMeta, error)
 	Head(ctx context.Context, bucket, key string) (*ObjectMeta, error)
 	Put(ctx context.Context, bucket, key string, body io.Reader, contentType string) (*ObjectMeta, error)
 	List(ctx context.Context, bucket string) ([]ObjectMeta, error)
+	ListPage(ctx context.Context, bucket string, p ListParams) (ListPage, error)
 	ListBuckets(ctx context.Context) ([]string, error)
 	BucketExists(ctx context.Context, bucket string) (bool, error)
 	CreateBucket(ctx context.Context, bucket string) error
