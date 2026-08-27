@@ -93,11 +93,10 @@ func (o *overlayStore) ListBuckets(ctx context.Context) ([]string, error) {
 }
 
 func (o *overlayStore) BucketExists(ctx context.Context, bucket string) (bool, error) {
-	ok, err := o.overlay.BucketExists(ctx, bucket)
-	if err != nil || ok {
-		return ok, err
-	}
-	return o.baseline.BucketExists(ctx, bucket)
+	// bucket existence is decided by the overlay alone: the baseline is a
+	// read-only fallback whose bucket may or may not exist, and checking it
+	// would issue a HeadBucket (requiring ListBucket permission) there
+	return o.overlay.BucketExists(ctx, bucket)
 }
 
 func (o *overlayStore) CreateBucket(ctx context.Context, bucket string) error {
