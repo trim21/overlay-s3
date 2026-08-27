@@ -93,11 +93,11 @@ jobs:
           mc cp /tmp/baseline.txt silo/baseline-data/remote.txt
 
           # create a client-visible bucket through the gateway
-          mc mb gw/demo
+          mc --debug mb gw/demo
 
           # upload through the gateway: lands in the overlay
           printf 'hello-from-mc' >/tmp/up.txt
-          mc cp /tmp/up.txt gw/demo/up.txt
+          mc --debug cp /tmp/up.txt gw/demo/up.txt
 
           # listing through the gateway shows the overlay write
           mc ls gw/demo | grep 'up\.txt'
@@ -116,12 +116,17 @@ jobs:
           test "$(mc cat gw/baseline-data/remote.txt)" = "shadowed"
           test "$(mc cat silo/baseline-data/remote.txt)" = "baseline-content"
 
-          # multipart upload through the gateway (mc splits at part-size)
-          head -c $((12 * 1024 * 1024)) /dev/urandom >/tmp/big.bin
-          mc cp --part-size 5MiB /tmp/big.bin gw/demo/big.bin
+          # multipart upload through the gateway: mc auto-splits objects
+          # larger than the default part size into a multipart upload
+          head -c $((100 * 1024 * 1024)) /dev/urandom >/tmp/big.bin
+          mc cp /tmp/big.bin gw/demo/big.bin
           mc cp gw/demo/big.bin /tmp/big-down.bin
           cmp /tmp/big.bin /tmp/big-down.bin
 
       - name: Print silo logs
         if: failure()
         run: docker logs silo 2>&1 | tail -200
+
+      - name: Print overlay-s3 gateway logs
+        if: failure()
+        run: cat /tmp/overlay-s3.log 2>/dev/null | tail -200 || true
