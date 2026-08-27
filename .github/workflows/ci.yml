@@ -46,6 +46,82 @@ jobs:
           S3_TEST_SECRET_KEY: minioadmin-secret
           S3_TEST_REGION: us-east-1
 
+      - name: Install mc
+        run: |
+          curl -sSL https://dl.min.io/client/mc/release/linux-amd64/mc -o /usr/local/bin/mc
+          chmod +x /usr/local/bin/mc
+          mc --version
+
+      - name: Start overlay-s3 gateway
+        run: |
+          go build -o overlay-s3 .
+          ./overlay-s3 \
+            -listen 127.0.0.1:8080 \
+            -overlay-endpoint http://127.0.0.1:9000 \
+            -overlay-region us-east-1 \
+            -overlay-access-key minioadmin \
+            -overlay-secret-key minioadmin-secret \
+            -overlay-bucket overlay-data \
+            -overlay-prefix gateway \
+            -baseline-endpoint http://127.0.0.1:9000 \
+            -baseline-region us-east-1 \
+            -baseline-access-key minioadmin \
+            -baseline-secret-key minioadmin-secret \
+            -auth-key demo \
+            -auth-secret demo-secret \
+            >/tmp/overlay-s3.log 2>&1 &
+          for i in $(seq 1 60); do
+            if curl -s -o /dev/null http://127.0.0.1:8080/; then
+              echo "gateway ready"
+              exit 0
+            fi
+            sleep 1
+          done
+          echo "gateway failed to become ready"
+          cat /tmp/overlay-s3.log
+          exit 1
+
+      - name: mc end-to-end (ls / cp / cat)
+        run: |
+          set -euo pipefail
+          mc alias set gw http://127.0.0.1:8080 demo demo-secret
+          mc alias set silo http://127.0.0.1:9000 minioadmin minioadmin-secret
+
+          # seed a read-only baseline bucket directly on silo
+          mc mb silo/baseline-data
+          printf 'baseline-content' >/tmp/baseline.txt
+          mc cp /tmp/baseline.txt silo/baseline-data/remote.txt
+
+          # create a client-visible bucket through the gateway
+          mc mb gw/demo
+
+          # upload through the gateway: lands in the overlay
+          printf 'hello-from-mc' >/tmp/up.txt
+          mc cp /tmp/up.txt gw/demo/up.txt
+
+          # listing through the gateway shows the overlay write
+          mc ls gw/demo | grep 'up\.txt'
+
+          # download the object back
+          mc cp gw/demo/up.txt /tmp/down.txt
+          diff /tmp/up.txt /tmp/down.txt
+
+          # read fallback: a baseline object is served through the gateway
+          test "$(mc cat gw/baseline-data/remote.txt)" = "baseline-content"
+
+          # shadow semantics: writing a baseline key via the gateway only
+          # touches the overlay; the baseline copy stays untouched
+          printf 'shadowed' >/tmp/shadow.txt
+          mc cp /tmp/shadow.txt gw/baseline-data/remote.txt
+          test "$(mc cat gw/baseline-data/remote.txt)" = "shadowed"
+          test "$(mc cat silo/baseline-data/remote.txt)" = "baseline-content"
+
+          # multipart upload through the gateway (mc splits at part-size)
+          head -c $((12 * 1024 * 1024)) /dev/urandom >/tmp/big.bin
+          mc cp --part-size 5MiB /tmp/big.bin gw/demo/big.bin
+          mc cp gw/demo/big.bin /tmp/big-down.bin
+          cmp /tmp/big.bin /tmp/big-down.bin
+
       - name: Print silo logs
         if: failure()
         run: docker logs silo 2>&1 | tail -200

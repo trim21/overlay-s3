@@ -162,6 +162,11 @@ a real S3 backend. They run when `S3_TEST_ENDPOINT`, `S3_TEST_ACCESS_KEY` and
 the same instance plays both roles, with the overlay mapped into a dedicated
 bucket under a `gw/` prefix.
 
+CI also boots the real gateway binary and drives it with the
+[mc](https://min.io/docs/minio/linux/reference/minio-mc.html) client
+(`ls`/`cp`/`cat`, including shadowing and multipart) for an end-to-end check
+of client compatibility.
+
 ## Limitations
 
 - object and bucket deletion are not supported (`NotImplemented`)
