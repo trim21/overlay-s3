@@ -77,12 +77,34 @@ func TestSigV4TamperedBody(t *testing.T) {
 	}
 }
 
-func TestSigV4RejectsStreaming(t *testing.T) {
+func TestSigV4StreamingSignature(t *testing.T) {
+	req, err := http.NewRequest(http.MethodPut,
+		"http://127.0.0.1:8080/bucket/key", strings.NewReader("hello"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	req.Header.Set("x-amz-content-sha256", streamingPayload)
+	signer := v4.NewSigner()
+	creds := aws.Credentials{AccessKeyID: "AKID", SecretAccessKey: "SECRET"}
+	if err := signer.SignHTTP(context.Background(), creds, req,
+		streamingPayload, "s3", "us-east-1", time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	if err := verifySigV4(req, "AKID", "SECRET"); err != nil {
+		t.Fatalf("streaming signature rejected: %v", err)
+	}
+}
+
+// TestSigV4AuthorizationWithoutSpaces guards the parsing fix for minio-go's
+// streaming signer, which emits "Credential=...,SignedHeaders=...,Signature=..."
+// without spaces after the commas.
+func TestSigV4AuthorizationWithoutSpaces(t *testing.T) {
 	req := signedRequest(t, http.MethodPut,
 		"http://127.0.0.1:8080/bucket/key", "hello", "AKID", "SECRET")
-	req.Header.Set("x-amz-content-sha256", "STREAMING-AWS4-HMAC-SHA256-PAYLOAD")
-	if err := verifySigV4(req, "AKID", "SECRET"); err == nil {
-		t.Fatal("streaming payload accepted")
+	req.Header.Set("Authorization", strings.ReplaceAll(
+		req.Header.Get("Authorization"), ", ", ","))
+	if err := verifySigV4(req, "AKID", "SECRET"); err != nil {
+		t.Fatalf("space-less authorization rejected: %v", err)
 	}
 }
 

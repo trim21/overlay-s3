@@ -23,6 +23,7 @@ const (
 	awsAlgorithm      = "AWS4-HMAC-SHA256"
 	emptyPayloadHash  = "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
 	unsignedPayload   = "UNSIGNED-PAYLOAD"
+	streamingPayload  = "STREAMING-AWS4-HMAC-SHA256-PAYLOAD"
 	requestTerminator = "aws4_request"
 	maxClockSkew      = 15 * time.Minute
 )
@@ -139,8 +140,10 @@ func verifySigV4(r *http.Request, accessKey, secretKey string) error {
 		return fmt.Errorf("unsupported authorization scheme")
 	}
 	fields := map[string]string{}
-	for _, kv := range strings.Split(rest, ", ") {
-		k, v, ok := strings.Cut(kv, "=")
+	// minio-go's streaming signer emits "Credential=...,SignedHeaders=...,Signature=..."
+	// without spaces after the commas, so split on "," and trim instead of ", "
+	for _, kv := range strings.Split(rest, ",") {
+		k, v, ok := strings.Cut(strings.TrimSpace(kv), "=")
 		if !ok {
 			return fmt.Errorf("malformed authorization header")
 		}
@@ -188,8 +191,8 @@ func verifySigV4(r *http.Request, accessKey, secretKey string) error {
 	if payloadHash == "" {
 		payloadHash = unsignedPayload
 	}
-	if strings.HasPrefix(payloadHash, "STREAMING-") {
-		return fmt.Errorf("chunked payload signing not supported; use a small upload or disable chunked encoding")
+	if strings.HasPrefix(payloadHash, "STREAMING-") && payloadHash != streamingPayload {
+		return fmt.Errorf("unsupported streaming payload signing %q", payloadHash)
 	}
 
 	signedHeaders := strings.Split(signedHeadersStr, ";")

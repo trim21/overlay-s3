@@ -117,9 +117,10 @@ func (s *integrationStores) startGateway(t *testing.T) *s3.Client {
 	t.Helper()
 	handler := gofakes3.New(newOverlayBackend(
 		newOverlayStore(s.overlay, s.baseline))).Server()
+	handler = sigv4Middleware(handler, "test", "test-secret")
 	ts := httptest.NewServer(handler)
 	t.Cleanup(ts.Close)
-	return newSDKClientForEndpoint(t, ts.URL, "test", "test", "us-east-1")
+	return newSDKClientForEndpoint(t, ts.URL, "test", "test-secret", "us-east-1")
 }
 
 func readBody(t *testing.T, out *s3.GetObjectOutput) string {
