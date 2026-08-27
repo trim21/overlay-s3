@@ -69,9 +69,11 @@ go build -o overlay-s3 .
 | `-overlay-access-key` / `-overlay-secret-key` | (required) | credentials for the overlay S3 |
 | `-overlay-bucket` | (required) | physical bucket holding all overlay data |
 | `-overlay-prefix` | (empty) | key prefix inside the overlay bucket; client `b/k` maps to `prefix/b/k` |
+| `-overlay-path-style` | `true` | use path-style addressing for the overlay S3 endpoint (disable for AWS) |
 | `-baseline-endpoint` | (AWS) | baseline S3 endpoint for read fallback, empty uses AWS |
 | `-baseline-region` | `us-east-1` | baseline S3 region |
 | `-baseline-access-key` / `-baseline-secret-key` | | credentials for the baseline S3 |
+| `-baseline-path-style` | `true` | use path-style addressing for the baseline S3 endpoint (disable for AWS) |
 | `-auth-key` / `-auth-secret` | (disabled) | key pair clients must sign requests with; empty disables signature checks |
 
 Clients (aws cli, SDKs, rclone) connect to the gateway and sign with

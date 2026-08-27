@@ -30,7 +30,7 @@ type s3Store struct {
 	mappedPrefix string // without trailing slash; may be empty
 }
 
-func newS3Client(ctx context.Context, endpoint, region, accessKey, secretKey string) (*s3.Client, error) {
+func newS3Client(ctx context.Context, endpoint, region, accessKey, secretKey string, pathStyle bool) (*s3.Client, error) {
 	cfg, err := awsconfig.LoadDefaultConfig(ctx,
 		awsconfig.WithRegion(region),
 		awsconfig.WithCredentialsProvider(
@@ -46,6 +46,11 @@ func newS3Client(ctx context.Context, endpoint, region, accessKey, secretKey str
 			o.BaseEndpoint = aws.String(endpoint)
 		})
 	}
+	if pathStyle {
+		opts = append(opts, func(o *s3.Options) {
+			o.UsePathStyle = true
+		})
+	}
 	// only add checksums when an operation requires them; the default
 	// CRC32-with-trailers streaming mode trips up some S3 implementations
 	opts = append(opts, func(o *s3.Options) {
@@ -55,8 +60,8 @@ func newS3Client(ctx context.Context, endpoint, region, accessKey, secretKey str
 }
 
 // newRemoteStore returns a store addressing the backend one-to-one.
-func newRemoteStore(ctx context.Context, endpoint, region, accessKey, secretKey string) (*s3Store, error) {
-	client, err := newS3Client(ctx, endpoint, region, accessKey, secretKey)
+func newRemoteStore(ctx context.Context, endpoint, region, accessKey, secretKey string, pathStyle bool) (*s3Store, error) {
+	client, err := newS3Client(ctx, endpoint, region, accessKey, secretKey, pathStyle)
 	if err != nil {
 		return nil, err
 	}
@@ -65,8 +70,8 @@ func newRemoteStore(ctx context.Context, endpoint, region, accessKey, secretKey 
 
 // newMappedStore returns an overlay-mode store nesting all client buckets
 // under prefix inside bucket.
-func newMappedStore(ctx context.Context, endpoint, region, accessKey, secretKey, bucket, prefix string) (*s3Store, error) {
-	client, err := newS3Client(ctx, endpoint, region, accessKey, secretKey)
+func newMappedStore(ctx context.Context, endpoint, region, accessKey, secretKey, bucket, prefix string, pathStyle bool) (*s3Store, error) {
+	client, err := newS3Client(ctx, endpoint, region, accessKey, secretKey, pathStyle)
 	if err != nil {
 		return nil, err
 	}

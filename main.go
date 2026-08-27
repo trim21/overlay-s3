@@ -24,11 +24,13 @@ func main() {
 		overlaySecretKey = flag.String("overlay-secret-key", "", "overlay S3 secret key")
 		overlayBucket    = flag.String("overlay-bucket", "", "physical bucket in the overlay S3 holding all data")
 		overlayPrefix    = flag.String("overlay-prefix", "", "key prefix inside the overlay bucket; client bucket b and key k map to prefix/b/k")
+		overlayPathStyle = flag.Bool("overlay-path-style", true, "use path-style addressing for the overlay S3 endpoint")
 
 		baselineEndpoint  = flag.String("baseline-endpoint", "", "baseline S3 endpoint for read fallback (empty uses AWS)")
 		baselineRegion    = flag.String("baseline-region", "us-east-1", "baseline S3 region")
 		baselineAccessKey = flag.String("baseline-access-key", "", "baseline S3 access key")
 		baselineSecretKey = flag.String("baseline-secret-key", "", "baseline S3 secret key")
+		baselinePathStyle = flag.Bool("baseline-path-style", true, "use path-style addressing for the baseline S3 endpoint")
 
 		authKey    = flag.String("auth-key", "", "access key clients must sign with (empty disables signature checks)")
 		authSecret = flag.String("auth-secret", "", "secret key clients must sign with")
@@ -48,7 +50,7 @@ func main() {
 	defer stop()
 
 	overlay, err := newMappedStore(ctx, *overlayEndpoint, *overlayRegion,
-		*overlayAccessKey, *overlaySecretKey, *overlayBucket, *overlayPrefix)
+		*overlayAccessKey, *overlaySecretKey, *overlayBucket, *overlayPrefix, *overlayPathStyle)
 	if err != nil {
 		log.Fatalf("overlay store: %v", err)
 	}
@@ -56,7 +58,7 @@ func main() {
 		log.Fatalf("overlay bucket %s: %v", *overlayBucket, err)
 	}
 	baseline, err := newRemoteStore(ctx, *baselineEndpoint, *baselineRegion,
-		*baselineAccessKey, *baselineSecretKey)
+		*baselineAccessKey, *baselineSecretKey, *baselinePathStyle)
 	if err != nil {
 		log.Fatalf("baseline store: %v", err)
 	}

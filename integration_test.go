@@ -64,7 +64,7 @@ func newIntegrationStores(t *testing.T) *integrationStores {
 
 	var err error
 	s.overlay, err = newMappedStore(ctx, endpoint, region, accessKey, secretKey,
-		s.overlayBucket, s.overlayPrefix)
+		s.overlayBucket, s.overlayPrefix, false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -76,7 +76,7 @@ func newIntegrationStores(t *testing.T) *integrationStores {
 	}); err != nil {
 		t.Fatalf("CreateBucket baseline: %v", err)
 	}
-	s.baseline, err = newRemoteStore(ctx, endpoint, region, accessKey, secretKey)
+	s.baseline, err = newRemoteStore(ctx, endpoint, region, accessKey, secretKey, false)
 	if err != nil {
 		t.Fatal(err)
 	}
