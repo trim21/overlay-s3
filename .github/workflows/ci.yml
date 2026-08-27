@@ -116,9 +116,10 @@ jobs:
           test "$(mc cat gw/baseline-data/remote.txt)" = "shadowed"
           test "$(mc cat silo/baseline-data/remote.txt)" = "baseline-content"
 
-          # multipart upload through the gateway (mc splits at part-size)
-          head -c $((12 * 1024 * 1024)) /dev/urandom >/tmp/big.bin
-          mc cp --part-size 5MiB /tmp/big.bin gw/demo/big.bin
+          # multipart upload through the gateway: mc auto-splits objects
+          # larger than the default part size into a multipart upload
+          head -c $((100 * 1024 * 1024)) /dev/urandom >/tmp/big.bin
+          mc cp /tmp/big.bin gw/demo/big.bin
           mc cp gw/demo/big.bin /tmp/big-down.bin
           cmp /tmp/big.bin /tmp/big-down.bin
 
