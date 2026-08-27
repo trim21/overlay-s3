@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"strings"
 	"time"
@@ -258,6 +259,9 @@ func (s *s3Store) List(ctx context.Context, bucket string) ([]ObjectMeta, error)
 			break
 		}
 		token = resp.NextContinuationToken
+		if token == nil {
+			return nil, fmt.Errorf("list %s/%s: truncated response without continuation token", b, prefix)
+		}
 	}
 	return out, nil
 }
@@ -301,6 +305,9 @@ func (s *s3Store) ListBuckets(ctx context.Context) ([]string, error) {
 			break
 		}
 		token = resp.NextContinuationToken
+		if token == nil {
+			return nil, fmt.Errorf("list buckets under %q: truncated response without continuation token", s.mappedPrefix)
+		}
 	}
 	return buckets, nil
 }
@@ -457,6 +464,9 @@ func (s *s3Store) ListParts(ctx context.Context, bucket, key, uploadID string) (
 			break
 		}
 		marker = resp.NextPartNumberMarker
+		if marker == nil {
+			return nil, fmt.Errorf("list parts %s/%s: truncated response without next part marker", b, k)
+		}
 	}
 	return out, nil
 }
@@ -492,6 +502,9 @@ func (s *s3Store) ListMultipartUploads(ctx context.Context, bucket string) ([]Mu
 		}
 		keyMarker = resp.NextKeyMarker
 		uploadIDMarker = resp.NextUploadIdMarker
+		if keyMarker == nil {
+			return nil, fmt.Errorf("list multipart uploads %s/%s: truncated response without next key marker", b, prefix)
+		}
 	}
 	return out, nil
 }
