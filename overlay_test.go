@@ -163,9 +163,13 @@ func TestOverlayListBuckets(t *testing.T) {
 }
 
 func TestOverlayBucketExists(t *testing.T) {
-	ov, _, _ := newTestOverlay(t)
-	// bucket existence is decided by the overlay alone, even if the
-	// baseline happens to hold the bucket
+	ov, _, remote := newTestOverlay(t)
+	if err := remote.CreateBucket(context.Background(), "rb"); err != nil {
+		t.Fatal(err)
+	}
+	if ok, err := ov.BucketExists(context.Background(), "rb"); err != nil || !ok {
+		t.Fatalf("remote bucket should exist: ok=%v err=%v", ok, err)
+	}
 	if ok, err := ov.BucketExists(context.Background(), "missing"); err != nil || ok {
 		t.Fatalf("missing bucket: ok=%v err=%v", ok, err)
 	}
