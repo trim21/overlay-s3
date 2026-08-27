@@ -337,6 +337,9 @@ func TestSDKListObjectsPagination(t *testing.T) {
 func TestSDKListObjectsPaginationMerged(t *testing.T) {
 	ctx := context.Background()
 	baseline := newMemStore()
+	if err := baseline.CreateBucket(ctx, "bucket"); err != nil {
+		t.Fatal(err)
+	}
 	for _, k := range []string{"r-a", "r-b", "r-c", "r-d"} {
 		if _, err := baseline.Put(ctx, "bucket", k, strings.NewReader(k), "text/plain"); err != nil {
 			t.Fatal(err)
@@ -387,6 +390,9 @@ func TestSDKListObjectsPaginationMerged(t *testing.T) {
 func TestSDKProxyFallback(t *testing.T) {
 	ctx := context.Background()
 	baseline := newMemStore()
+	if err := baseline.CreateBucket(ctx, "bucket"); err != nil {
+		t.Fatal(err)
+	}
 	if _, err := baseline.Put(ctx, "bucket", "proxy-key", strings.NewReader("remote-data"), "text/plain"); err != nil {
 		t.Fatal(err)
 	}

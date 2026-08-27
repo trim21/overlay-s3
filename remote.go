@@ -150,10 +150,7 @@ func mapS3Error(err error) error {
 	var nsk *types.NoSuchKey
 	var nsb *types.NoSuchBucket
 	var nf *types.NotFound
-	if errors.As(err, &nsb) {
-		return ErrNoSuchBucket
-	}
-	if errors.As(err, &nsk) || errors.As(err, &nf) {
+	if errors.As(err, &nsk) || errors.As(err, &nsb) || errors.As(err, &nf) {
 		return ErrNotFound
 	}
 	return err

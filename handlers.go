@@ -50,11 +50,6 @@ func (s *s3Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			writeS3Error(w, se.Status, se.Code, se.Message)
 			return
 		}
-		if errors.Is(err, ErrNoSuchBucket) {
-			writeS3Error(w, http.StatusNotFound, "NoSuchBucket",
-				"The specified bucket does not exist")
-			return
-		}
 		var apiErr smithy.APIError
 		if errors.As(err, &apiErr) && apiErr.ErrorCode() == "AccessDenied" {
 			writeS3Error(w, http.StatusForbidden, "AccessDenied", apiErr.ErrorMessage())
@@ -63,6 +58,17 @@ func (s *s3Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		zlog.Error().Str("method", r.Method).Str("path", r.URL.Path).Err(err).Msg("s3 handler failed")
 		writeS3Error(w, http.StatusInternalServerError, "InternalError", err.Error())
 	}
+}
+
+// noSuchBucket maps ErrNotFound to a NoSuchBucket error for operations
+// that require the bucket itself to exist (listings, writes, multipart
+// initiation). The overlay bucket is ensured at startup, so backend
+// NoSuchBucket here means a client-visible bucket that does not exist.
+func noSuchBucket(err error) error {
+	if errors.Is(err, ErrNotFound) {
+		return &s3Error{http.StatusNotFound, "NoSuchBucket", "The specified bucket does not exist"}
+	}
+	return err
 }
 
 func (s *s3Server) dispatch(w http.ResponseWriter, r *http.Request, op s3Op, bucket, key string) error {
@@ -196,7 +202,7 @@ func (s *s3Server) handleListObjectsV2(w http.ResponseWriter, r *http.Request, b
 
 	objs, err := s.store.List(r.Context(), bucket)
 	if err != nil {
-		return err
+		return noSuchBucket(err)
 	}
 
 	type item struct {
@@ -402,7 +408,7 @@ func (s *s3Server) handlePutObject(w http.ResponseWriter, r *http.Request, bucke
 	}
 	meta, err := s.store.Put(r.Context(), bucket, key, r.Body, contentType)
 	if err != nil {
-		return err
+		return noSuchBucket(err)
 	}
 	w.Header().Set("ETag", `"`+meta.ETag+`"`)
 	w.WriteHeader(http.StatusOK)
@@ -432,7 +438,7 @@ func (s *s3Server) handleCopyObject(w http.ResponseWriter, r *http.Request, buck
 	}
 	dstMeta, err := s.store.Put(r.Context(), bucket, key, rc, contentType)
 	if err != nil {
-		return err
+		return noSuchBucket(err)
 	}
 	writeXML(w, http.StatusOK, copyObjectResult{
 		Xmlns:        s3NS,
@@ -449,7 +455,7 @@ func (s *s3Server) handleCreateMultipartUpload(w http.ResponseWriter, r *http.Re
 	}
 	id, err := s.store.InitiateMultipart(r.Context(), bucket, key, contentType)
 	if err != nil {
-		return err
+		return noSuchBucket(err)
 	}
 	writeXML(w, http.StatusOK, initiateMultipartUploadResult{
 		Xmlns: s3NS, Bucket: bucket, Key: key, UploadID: id,

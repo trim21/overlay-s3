@@ -60,7 +60,7 @@ func (s *memStore) Put(ctx context.Context, bucket, key string, body io.Reader, 
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if !s.buckets[bucket] {
-		return nil, ErrNoSuchBucket
+		return nil, ErrNotFound
 	}
 	if s.objects[bucket] == nil {
 		s.objects[bucket] = map[string]*memObject{}
@@ -111,7 +111,7 @@ func (s *memStore) List(ctx context.Context, bucket string) ([]ObjectMeta, error
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if !s.buckets[bucket] {
-		return nil, ErrNoSuchBucket
+		return nil, ErrNotFound
 	}
 	var out []ObjectMeta
 	for key, obj := range s.objects[bucket] {
