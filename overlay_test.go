@@ -19,6 +19,12 @@ func newTestOverlay(t *testing.T) (*overlayStore, *memStore, *memStore) {
 	t.Helper()
 	overlay := newMemStore()
 	baseline := newMemStore()
+	ctx := context.Background()
+	for _, m := range []*memStore{overlay, baseline} {
+		if err := m.CreateBucket(ctx, "bucket"); err != nil {
+			t.Fatal(err)
+		}
+	}
 	return newOverlayStore(overlay, baseline), overlay, baseline
 }
 
@@ -105,12 +111,8 @@ func TestOverlayHeadFallback(t *testing.T) {
 
 func TestOverlayListMissingBucket(t *testing.T) {
 	ov, _, _ := newTestOverlay(t)
-	objs, err := ov.List(context.Background(), "no-such-bucket")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(objs) != 0 {
-		t.Fatalf("expected empty list, got %v", objs)
+	if _, err := ov.List(context.Background(), "no-such-bucket"); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("expected ErrNotFound, got %v", err)
 	}
 }
 
@@ -155,7 +157,7 @@ func TestOverlayListBuckets(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if strings.Join(buckets, ",") != "local-bucket,remote-bucket" {
+	if strings.Join(buckets, ",") != "bucket,local-bucket,remote-bucket" {
 		t.Fatalf("unexpected buckets: %v", buckets)
 	}
 }

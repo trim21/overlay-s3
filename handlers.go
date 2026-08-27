@@ -11,6 +11,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/aws/smithy-go"
 	zlog "github.com/rs/zerolog/log"
 )
 
@@ -49,9 +50,25 @@ func (s *s3Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			writeS3Error(w, se.Status, se.Code, se.Message)
 			return
 		}
+		var apiErr smithy.APIError
+		if errors.As(err, &apiErr) && apiErr.ErrorCode() == "AccessDenied" {
+			writeS3Error(w, http.StatusForbidden, "AccessDenied", apiErr.ErrorMessage())
+			return
+		}
 		zlog.Error().Str("method", r.Method).Str("path", r.URL.Path).Err(err).Msg("s3 handler failed")
 		writeS3Error(w, http.StatusInternalServerError, "InternalError", err.Error())
 	}
+}
+
+// noSuchBucket maps ErrNotFound to a NoSuchBucket error for operations
+// that require the bucket itself to exist (listings, writes, multipart
+// initiation). The overlay bucket is ensured at startup, so backend
+// NoSuchBucket here means a client-visible bucket that does not exist.
+func noSuchBucket(err error) error {
+	if errors.Is(err, ErrNotFound) {
+		return &s3Error{http.StatusNotFound, "NoSuchBucket", "The specified bucket does not exist"}
+	}
+	return err
 }
 
 func (s *s3Server) dispatch(w http.ResponseWriter, r *http.Request, op s3Op, bucket, key string) error {
@@ -169,23 +186,7 @@ func (s *s3Server) handleBucketMeta(w http.ResponseWriter, r *http.Request, buck
 	return nil
 }
 
-// ensureBucket verifies the bucket exists before operations that would
-// otherwise silently succeed or fail with a misleading error.
-func (s *s3Server) ensureBucket(r *http.Request, bucket string) error {
-	ok, err := s.store.BucketExists(r.Context(), bucket)
-	if err != nil {
-		return err
-	}
-	if !ok {
-		return &s3Error{http.StatusNotFound, "NoSuchBucket", "The specified bucket does not exist"}
-	}
-	return nil
-}
-
 func (s *s3Server) handleListObjectsV2(w http.ResponseWriter, r *http.Request, bucket string) error {
-	if err := s.ensureBucket(r, bucket); err != nil {
-		return err
-	}
 	q := r.URL.Query()
 	prefix := q.Get("prefix")
 	delimiter := q.Get("delimiter")
@@ -201,7 +202,7 @@ func (s *s3Server) handleListObjectsV2(w http.ResponseWriter, r *http.Request, b
 
 	objs, err := s.store.List(r.Context(), bucket)
 	if err != nil {
-		return err
+		return noSuchBucket(err)
 	}
 
 	type item struct {
@@ -381,9 +382,6 @@ func (s *s3Server) handleHeadObject(w http.ResponseWriter, r *http.Request, buck
 }
 
 func (s *s3Server) handlePutObject(w http.ResponseWriter, r *http.Request, bucket, key string) error {
-	if err := s.ensureBucket(r, bucket); err != nil {
-		return err
-	}
 	if r.Header.Get("If-None-Match") == "*" {
 		_, err := s.store.Head(r.Context(), bucket, key)
 		if err == nil {
@@ -410,7 +408,7 @@ func (s *s3Server) handlePutObject(w http.ResponseWriter, r *http.Request, bucke
 	}
 	meta, err := s.store.Put(r.Context(), bucket, key, r.Body, contentType)
 	if err != nil {
-		return err
+		return noSuchBucket(err)
 	}
 	w.Header().Set("ETag", `"`+meta.ETag+`"`)
 	w.WriteHeader(http.StatusOK)
@@ -418,9 +416,6 @@ func (s *s3Server) handlePutObject(w http.ResponseWriter, r *http.Request, bucke
 }
 
 func (s *s3Server) handleCopyObject(w http.ResponseWriter, r *http.Request, bucket, key string) error {
-	if err := s.ensureBucket(r, bucket); err != nil {
-		return err
-	}
 	src := strings.TrimPrefix(r.Header.Get("X-Amz-Copy-Source"), "/")
 	if i := strings.IndexByte(src, '?'); i >= 0 {
 		src = src[:i]
@@ -443,7 +438,7 @@ func (s *s3Server) handleCopyObject(w http.ResponseWriter, r *http.Request, buck
 	}
 	dstMeta, err := s.store.Put(r.Context(), bucket, key, rc, contentType)
 	if err != nil {
-		return err
+		return noSuchBucket(err)
 	}
 	writeXML(w, http.StatusOK, copyObjectResult{
 		Xmlns:        s3NS,
@@ -454,16 +449,13 @@ func (s *s3Server) handleCopyObject(w http.ResponseWriter, r *http.Request, buck
 }
 
 func (s *s3Server) handleCreateMultipartUpload(w http.ResponseWriter, r *http.Request, bucket, key string) error {
-	if err := s.ensureBucket(r, bucket); err != nil {
-		return err
-	}
 	contentType := r.Header.Get("Content-Type")
 	if contentType == "" {
 		contentType = "binary/octet-stream"
 	}
 	id, err := s.store.InitiateMultipart(r.Context(), bucket, key, contentType)
 	if err != nil {
-		return err
+		return noSuchBucket(err)
 	}
 	writeXML(w, http.StatusOK, initiateMultipartUploadResult{
 		Xmlns: s3NS, Bucket: bucket, Key: key, UploadID: id,
@@ -472,9 +464,6 @@ func (s *s3Server) handleCreateMultipartUpload(w http.ResponseWriter, r *http.Re
 }
 
 func (s *s3Server) handleUploadPart(w http.ResponseWriter, r *http.Request, bucket, key string) error {
-	if err := s.ensureBucket(r, bucket); err != nil {
-		return err
-	}
 	uploadID := r.URL.Query().Get("uploadId")
 	partNumber, err := strconv.Atoi(r.URL.Query().Get("partNumber"))
 	if err != nil || partNumber <= 0 {
@@ -501,9 +490,6 @@ type completeMultipartUploadRequest struct {
 }
 
 func (s *s3Server) handleCompleteMultipartUpload(w http.ResponseWriter, r *http.Request, bucket, key string) error {
-	if err := s.ensureBucket(r, bucket); err != nil {
-		return err
-	}
 	uploadID := r.URL.Query().Get("uploadId")
 	var req completeMultipartUploadRequest
 	if err := xml.NewDecoder(r.Body).Decode(&req); err != nil {
@@ -539,9 +525,6 @@ func (s *s3Server) handleCompleteMultipartUpload(w http.ResponseWriter, r *http.
 }
 
 func (s *s3Server) handleAbortMultipartUpload(w http.ResponseWriter, r *http.Request, bucket, key string) error {
-	if err := s.ensureBucket(r, bucket); err != nil {
-		return err
-	}
 	err := s.store.AbortMultipart(r.Context(), bucket, key, r.URL.Query().Get("uploadId"))
 	if errors.Is(err, errUploadNotFound) {
 		return &s3Error{http.StatusNotFound, "NoSuchUpload",
@@ -555,9 +538,6 @@ func (s *s3Server) handleAbortMultipartUpload(w http.ResponseWriter, r *http.Req
 }
 
 func (s *s3Server) handleListParts(w http.ResponseWriter, r *http.Request, bucket, key string) error {
-	if err := s.ensureBucket(r, bucket); err != nil {
-		return err
-	}
 	uploadID := r.URL.Query().Get("uploadId")
 	parts, err := s.store.ListParts(r.Context(), bucket, key, uploadID)
 	if errors.Is(err, errUploadNotFound) {
@@ -581,9 +561,6 @@ func (s *s3Server) handleListParts(w http.ResponseWriter, r *http.Request, bucke
 }
 
 func (s *s3Server) handleListMultipartUploads(w http.ResponseWriter, r *http.Request, bucket string) error {
-	if err := s.ensureBucket(r, bucket); err != nil {
-		return err
-	}
 	uploads, err := s.store.ListMultipartUploads(r.Context(), bucket)
 	if err != nil {
 		return err
