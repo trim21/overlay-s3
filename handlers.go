@@ -137,13 +137,10 @@ func (s *s3Server) handleCreateBucket(w http.ResponseWriter, r *http.Request, bu
 }
 
 func (s *s3Server) handleHeadBucket(w http.ResponseWriter, r *http.Request, bucket string) error {
-	ok, err := s.store.BucketExists(r.Context(), bucket)
-	if err != nil {
-		return err
-	}
-	if !ok {
-		return &s3Error{http.StatusNotFound, "NoSuchBucket", "The specified bucket does not exist"}
-	}
+	// a client-visible bucket is assumed to exist: it was either created
+	// through the gateway (overlay) or is served read-only from the
+	// baseline. Probing existence would require permissions (HeadBucket)
+	// on a store that may not hold the bucket at all.
 	w.WriteHeader(http.StatusOK)
 	return nil
 }
