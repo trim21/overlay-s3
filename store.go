@@ -10,6 +10,10 @@ import (
 // ErrNotFound is returned when an object or bucket does not exist.
 var ErrNotFound = errors.New("not found")
 
+// ErrNoSuchBucket is returned when the addressed bucket itself does not
+// exist, so handlers can render NoSuchBucket instead of NoSuchKey.
+var ErrNoSuchBucket = errors.New("bucket not found")
+
 // ObjectMeta describes a stored object.
 type ObjectMeta struct {
 	Key          string
