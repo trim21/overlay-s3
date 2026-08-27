@@ -102,6 +102,11 @@ jobs:
           # listing through the gateway shows the overlay write
           mc ls gw/demo | grep 'up\.txt'
 
+          # cp into a bucket that was never created: the location
+          # preflight must succeed and the write must land in the overlay
+          mc cp /tmp/up.txt gw/never-created/up.txt
+          test "$(mc cat gw/never-created/up.txt)" = "hello-from-mc"
+
           # download the object back
           mc cp gw/demo/up.txt /tmp/down.txt
           diff /tmp/up.txt /tmp/down.txt

@@ -146,13 +146,10 @@ func (s *s3Server) handleHeadBucket(w http.ResponseWriter, r *http.Request, buck
 }
 
 func (s *s3Server) handleBucketLocation(w http.ResponseWriter, r *http.Request, bucket string) error {
-	ok, err := s.store.BucketExists(r.Context(), bucket)
-	if err != nil {
-		return err
-	}
-	if !ok {
-		return &s3Error{http.StatusNotFound, "NoSuchBucket", "The specified bucket does not exist"}
-	}
+	// a client-visible bucket is assumed to exist (created through the
+	// gateway or served from the baseline); answering location for any
+	// bucket keeps minio-go's getBucketLocation preflight from aborting
+	// uploads to not-yet-created buckets
 	writeXML(w, http.StatusOK, locationConstraint{Xmlns: s3NS})
 	return nil
 }
@@ -161,13 +158,6 @@ func (s *s3Server) handleBucketLocation(w http.ResponseWriter, r *http.Request, 
 // SDKs) send eagerly; the gateway has no versioning or object-lock
 // configuration, so it reports the unconfigured defaults.
 func (s *s3Server) handleBucketMeta(w http.ResponseWriter, r *http.Request, bucket string) error {
-	ok, err := s.store.BucketExists(r.Context(), bucket)
-	if err != nil {
-		return err
-	}
-	if !ok {
-		return &s3Error{http.StatusNotFound, "NoSuchBucket", "The specified bucket does not exist"}
-	}
 	q := r.URL.Query()
 	switch {
 	case q.Has("versioning"):
