@@ -40,7 +40,7 @@ func TestOverlayGetPrefersLocal(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	rc, meta, err := ov.Get(context.Background(), "bucket", "a")
+	rc, meta, err := ov.Get(context.Background(), "bucket", "a", nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -53,7 +53,7 @@ func TestOverlayGetPrefersLocal(t *testing.T) {
 		t.Fatalf("etag should reflect local content, got %s", meta.ETag)
 	}
 
-	rc, meta, err = ov.Get(context.Background(), "bucket", "c")
+	rc, meta, err = ov.Get(context.Background(), "bucket", "c", nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -63,8 +63,50 @@ func TestOverlayGetPrefersLocal(t *testing.T) {
 		t.Fatalf("fallback to remote, got %q", data)
 	}
 
-	if _, _, err := ov.Get(context.Background(), "bucket", "missing"); err != ErrNotFound {
+	if _, _, err := ov.Get(context.Background(), "bucket", "missing", nil); err != ErrNotFound {
 		t.Fatalf("expected ErrNotFound, got %v", err)
+	}
+}
+
+// TestOverlayGetRanges checks that a byte range is carried through both the
+// overlay hit path and the baseline fallback.
+func TestOverlayGetRanges(t *testing.T) {
+	ov, _, remote := newTestOverlay(t)
+	ctx := context.Background()
+	if _, err := remote.Put(ctx, "bucket", "r", strings.NewReader("remote-payload"), "text/plain"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := ov.Put(ctx, "bucket", "l", strings.NewReader("local-payload"), "text/plain"); err != nil {
+		t.Fatal(err)
+	}
+
+	tests := []struct {
+		key  string
+		rng  ByteRange
+		want string
+	}{
+		{"r", ByteRange{Start: 7, Length: 4}, "payl"}, // baseline fallback
+		{"r", ByteRange{Start: 6, Length: 8}, "-payload"},
+		{"l", ByteRange{Start: 0, Length: 5}, "local"}, // overlay wins
+		{"l", ByteRange{Start: 5, Length: 8}, "-payload"},
+	}
+	for _, tt := range tests {
+		rc, meta, err := ov.Get(ctx, "bucket", tt.key, &tt.rng)
+		if err != nil {
+			t.Fatalf("%s %+v: %v", tt.key, tt.rng, err)
+		}
+		data, err := io.ReadAll(rc)
+		rc.Close()
+		if err != nil {
+			t.Fatal(err)
+		}
+		if string(data) != tt.want {
+			t.Errorf("%s %+v: body = %q, want %q", tt.key, tt.rng, data, tt.want)
+		}
+		if meta.Size != int64(len(tt.want)) {
+			t.Errorf("%s %+v: meta.Size = %d, want %d",
+				tt.key, tt.rng, meta.Size, len(tt.want))
+		}
 	}
 }
 
@@ -234,7 +276,7 @@ func TestOverlayMultipartRoundTrip(t *testing.T) {
 		t.Fatalf("etag = %q, want %q", meta.ETag, want)
 	}
 
-	rc, m, err := ov.Get(ctx, "bucket", "big")
+	rc, m, err := ov.Get(ctx, "bucket", "big", nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -282,7 +324,7 @@ func TestOverlayMultipartAbort(t *testing.T) {
 	if len(uploads) != 0 {
 		t.Fatalf("aborted upload still listed: %+v", uploads)
 	}
-	if _, _, err := ov.Get(ctx, "bucket", "k"); err != ErrNotFound {
+	if _, _, err := ov.Get(ctx, "bucket", "k", nil); err != ErrNotFound {
 		t.Fatalf("aborted upload must not create an object, got %v", err)
 	}
 	if _, err := ov.CompleteMultipart(ctx, "bucket", "k", uploadID, nil); !errors.Is(err, errUploadNotFound) {

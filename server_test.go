@@ -4,9 +4,11 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"errors"
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -260,6 +262,152 @@ func TestServerHeadObject(t *testing.T) {
 	mresp.Body.Close()
 	if mresp.StatusCode != http.StatusNotFound {
 		t.Fatalf("head missing status %d", mresp.StatusCode)
+	}
+}
+
+func TestServerParseByteRange(t *testing.T) {
+	tests := []struct {
+		header     string
+		size       int64
+		wantStart  int64
+		wantLength int64
+		wantIgnore bool // Range must be ignored and the whole object served
+		want416    bool
+	}{
+		{header: "bytes=0-4", size: 20, wantStart: 0, wantLength: 5},
+		{header: "bytes=5-9", size: 20, wantStart: 5, wantLength: 5},
+		{header: "bytes=19-19", size: 20, wantStart: 19, wantLength: 1},
+		{header: "bytes=15-", size: 20, wantStart: 15, wantLength: 5},
+		{header: "bytes=-4", size: 20, wantStart: 16, wantLength: 4},
+		{header: "bytes=-1", size: 20, wantStart: 19, wantLength: 1},
+		// both ends clamp to the object
+		{header: "bytes=0-1000", size: 20, wantStart: 0, wantLength: 20},
+		{header: "bytes=-100", size: 20, wantStart: 0, wantLength: 20},
+		// unsatisfiable
+		{header: "bytes=20-", size: 20, want416: true},
+		{header: "bytes=999-1000", size: 20, want416: true},
+		{header: "bytes=5-3", size: 20, want416: true},
+		{header: "bytes=-0", size: 20, want416: true},
+		{header: "bytes=0-", size: 0, want416: true},
+		{header: "bytes=-4", size: 0, want416: true},
+		// multi-part ranges and malformed syntax are ignored, as on AWS
+		{header: "bytes=0-1,5-9", size: 20, wantIgnore: true},
+		{header: "bytes=abc-def", size: 20, wantIgnore: true},
+		{header: "bytes=0-4;5", size: 20, wantIgnore: true},
+		{header: "bytes=", size: 20, wantIgnore: true},
+		{header: "items=0-4", size: 20, wantIgnore: true},
+		{header: "bytes=0", size: 20, wantIgnore: true},
+	}
+	for _, tt := range tests {
+		got, err := parseByteRange(tt.header, tt.size)
+		switch {
+		case tt.wantIgnore:
+			if got != nil || err != nil {
+				t.Errorf("%q on %d bytes: got (%v, %v), want Range ignored",
+					tt.header, tt.size, got, err)
+			}
+		case tt.want416:
+			var se *s3Error
+			if !errors.As(err, &se) || se.Status != http.StatusRequestedRangeNotSatisfiable {
+				t.Errorf("%q on %d bytes: got (%v, %v), want 416",
+					tt.header, tt.size, got, err)
+			}
+		default:
+			if err != nil {
+				t.Errorf("%q on %d bytes: %v", tt.header, tt.size, err)
+				continue
+			}
+			if got.Start != tt.wantStart || got.Length != tt.wantLength {
+				t.Errorf("%q on %d bytes: got %+v, want start %d length %d",
+					tt.header, tt.size, got, tt.wantStart, tt.wantLength)
+			}
+		}
+	}
+}
+
+// TestServerRangeRequests is the regression guard for ranged GET: the body
+// used to be streamed whole into a response declaring only the slice, so
+// net/http aborted the connection and clients received an empty body.
+func TestServerRangeRequests(t *testing.T) {
+	ts := newTestServer(t)
+	createBucket(t, ts.URL+"/bucket")
+	const full = "0123456789ABCDEFGHIJ" // 20 bytes
+	putObject(t, ts.URL+"/bucket/key", full).Body.Close()
+
+	tests := []struct {
+		header     string
+		wantStatus int
+		wantBody   string
+		wantCR     string
+	}{
+		{"bytes=0-4", http.StatusPartialContent, "01234", "bytes 0-4/20"},
+		{"bytes=5-9", http.StatusPartialContent, "56789", "bytes 5-9/20"},
+		{"bytes=15-", http.StatusPartialContent, "FGHIJ", "bytes 15-19/20"},
+		{"bytes=-4", http.StatusPartialContent, "GHIJ", "bytes 16-19/20"},
+		{"bytes=19-19", http.StatusPartialContent, "J", "bytes 19-19/20"},
+		{"bytes=0-1000", http.StatusPartialContent, full, "bytes 0-19/20"},
+		// ignored ranges fall back to a whole-object 200
+		{"bytes=0-1,5-9", http.StatusOK, full, ""},
+		{"bytes=nonsense", http.StatusOK, full, ""},
+	}
+	for _, tt := range tests {
+		req, _ := http.NewRequest(http.MethodGet, ts.URL+"/bucket/key", nil)
+		req.Header.Set("Range", tt.header)
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			t.Fatalf("%s: %v", tt.header, err)
+		}
+		body, err := io.ReadAll(resp.Body)
+		resp.Body.Close()
+		if err != nil {
+			t.Fatalf("%s: read body: %v", tt.header, err)
+		}
+		if resp.StatusCode != tt.wantStatus {
+			t.Errorf("%s: status = %d, want %d", tt.header, resp.StatusCode, tt.wantStatus)
+		}
+		if string(body) != tt.wantBody {
+			t.Errorf("%s: body = %q, want %q", tt.header, body, tt.wantBody)
+		}
+		if got := resp.Header.Get("Content-Range"); got != tt.wantCR {
+			t.Errorf("%s: Content-Range = %q, want %q", tt.header, got, tt.wantCR)
+		}
+		// the invariant: never write more or less than the declared length
+		if want := strconv.Itoa(len(tt.wantBody)); resp.Header.Get("Content-Length") != want {
+			t.Errorf("%s: Content-Length = %q, want %q",
+				tt.header, resp.Header.Get("Content-Length"), want)
+		}
+	}
+
+	// unsatisfiable ranges report InvalidRange
+	for _, header := range []string{"bytes=20-", "bytes=-0"} {
+		req, _ := http.NewRequest(http.MethodGet, ts.URL+"/bucket/key", nil)
+		req.Header.Set("Range", header)
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			t.Fatalf("%s: %v", header, err)
+		}
+		body, _ := io.ReadAll(resp.Body)
+		resp.Body.Close()
+		if resp.StatusCode != http.StatusRequestedRangeNotSatisfiable {
+			t.Errorf("%s: status = %d, want 416:\n%s", header, resp.StatusCode, body)
+		}
+		if !strings.Contains(string(body), "<Code>InvalidRange</Code>") {
+			t.Errorf("%s: body = %s, want InvalidRange", header, body)
+		}
+	}
+
+	// a ranged read of a missing key reports NoSuchKey, not a range error
+	req, _ := http.NewRequest(http.MethodGet, ts.URL+"/bucket/missing", nil)
+	req.Header.Set("Range", "bytes=0-4")
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	body, _ := io.ReadAll(resp.Body)
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusNotFound ||
+		!strings.Contains(string(body), "<Code>NoSuchKey</Code>") {
+		t.Errorf("missing key: status = %d body = %s, want 404 NoSuchKey", resp.StatusCode, body)
 	}
 }
 

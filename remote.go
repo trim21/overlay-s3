@@ -165,12 +165,16 @@ func mapS3Error(err error) error {
 	return err
 }
 
-func (s *s3Store) Get(ctx context.Context, bucket, key string) (io.ReadCloser, *ObjectMeta, error) {
+func (s *s3Store) Get(ctx context.Context, bucket, key string, rng *ByteRange) (io.ReadCloser, *ObjectMeta, error) {
 	b, k := s.mapKey(bucket, key)
-	out, err := s.client.GetObject(ctx, &s3.GetObjectInput{
+	in := &s3.GetObjectInput{
 		Bucket: aws.String(b),
 		Key:    aws.String(k),
-	})
+	}
+	if rng != nil {
+		in.Range = aws.String(rng.header())
+	}
+	out, err := s.client.GetObject(ctx, in)
 	if err != nil {
 		return nil, nil, mapS3Error(err)
 	}
@@ -181,7 +185,21 @@ func (s *s3Store) Get(ctx context.Context, bucket, key string) (io.ReadCloser, *
 		LastModified: aws.ToTime(out.LastModified),
 		ContentType:  aws.ToString(out.ContentType),
 	}
-	return out.Body, meta, nil
+	body := out.Body
+	if rng != nil && aws.ToString(out.ContentRange) == "" {
+		// No Content-Range means the backend answered with the whole object
+		// instead of the requested slice: skip to the offset, otherwise the
+		// caller gets bytes it never asked for.
+		if _, err := io.CopyN(io.Discard, body, rng.Start); err != nil && !errors.Is(err, io.EOF) {
+			body.Close()
+			return nil, nil, err
+		}
+		body = io.NopCloser(io.LimitReader(body, rng.Length))
+		if meta.Size > rng.Length {
+			meta.Size = rng.Length
+		}
+	}
+	return body, meta, nil
 }
 
 func (s *s3Store) Head(ctx context.Context, bucket, key string) (*ObjectMeta, error) {

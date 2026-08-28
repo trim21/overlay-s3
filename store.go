@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"time"
 )
@@ -13,10 +14,21 @@ var ErrNotFound = errors.New("not found")
 // ObjectMeta describes a stored object.
 type ObjectMeta struct {
 	Key          string
-	Size         int64
+	Size         int64  // bytes the returned body carries: the whole object, or a range slice
 	ETag         string // hex MD5, without quotes
 	LastModified time.Time
 	ContentType  string
+}
+
+// ByteRange selects a slice of an object: Length bytes starting at Start.
+type ByteRange struct {
+	Start  int64
+	Length int64
+}
+
+// header renders the range in the HTTP Range syntax S3 backends accept.
+func (b *ByteRange) header() string {
+	return fmt.Sprintf("bytes=%d-%d", b.Start, b.Start+b.Length-1)
 }
 
 // CompletedPart names one part in a CompleteMultipartUpload request.
@@ -66,7 +78,10 @@ type ListPage struct {
 
 // Store is the minimal object-store surface the overlay composes.
 type Store interface {
-	Get(ctx context.Context, bucket, key string) (io.ReadCloser, *ObjectMeta, error)
+	// Get returns an object body. With rng set the body carries exactly that
+	// slice and meta.Size is rng.Length: a store whose backend ignores the
+	// range must slice the response itself.
+	Get(ctx context.Context, bucket, key string, rng *ByteRange) (io.ReadCloser, *ObjectMeta, error)
 	Head(ctx context.Context, bucket, key string) (*ObjectMeta, error)
 	Put(ctx context.Context, bucket, key string, body io.Reader, contentType string) (*ObjectMeta, error)
 	ListPage(ctx context.Context, bucket string, p ListParams) (ListPage, error)

@@ -240,48 +240,65 @@ func (s *s3Server) handleListObjectsV2(w http.ResponseWriter, r *http.Request, b
 	return nil
 }
 
-type httpRange struct {
-	start, length int64
-}
+// errRangeUnsatisfiable is the S3 answer to a range no byte of the object can
+// satisfy.
+var errRangeUnsatisfiable = &s3Error{http.StatusRequestedRangeNotSatisfiable,
+	"InvalidRange", "The requested range is not satisfiable"}
 
-func parseRange(h string, size int64) (*httpRange, error) {
+// parseByteRange resolves a Range header against an object of the given size.
+// A nil range with a nil error means the header must be ignored: the gateway
+// does not serve multi-part ranges, and AWS answers a malformed Range with the
+// whole object rather than an error, so clients keep working.
+func parseByteRange(h string, size int64) (*ByteRange, error) {
 	if !strings.HasPrefix(h, "bytes=") {
-		return nil, fmt.Errorf("unsupported range %q", h)
+		return nil, nil
 	}
 	spec := strings.TrimPrefix(h, "bytes=")
+	if strings.ContainsRune(spec, ',') {
+		return nil, nil
+	}
 	startStr, endStr, ok := strings.Cut(spec, "-")
 	if !ok {
-		return nil, fmt.Errorf("invalid range %q", h)
+		return nil, nil
 	}
 	if startStr == "" {
-		// suffix range: last N bytes
+		// suffix range: the last n bytes of the object
 		n, err := strconv.ParseInt(endStr, 10, 64)
 		if err != nil {
-			return nil, err
+			return nil, nil
 		}
 		if n <= 0 {
-			return nil, fmt.Errorf("invalid suffix range %q", h)
+			return nil, errRangeUnsatisfiable
 		}
-		if n > size {
+		if n >= size {
 			n = size
 		}
-		return &httpRange{start: size - n, length: n}, nil
+		if n == 0 {
+			return nil, errRangeUnsatisfiable
+		}
+		return &ByteRange{Start: size - n, Length: n}, nil
 	}
 	start, err := strconv.ParseInt(startStr, 10, 64)
-	if err != nil || start < 0 || start >= size {
-		return nil, fmt.Errorf("invalid range %q", h)
+	if err != nil || start < 0 {
+		return nil, nil
+	}
+	if start >= size {
+		return nil, errRangeUnsatisfiable
 	}
 	end := size - 1
 	if endStr != "" {
 		end, err = strconv.ParseInt(endStr, 10, 64)
-		if err != nil || end < start {
-			return nil, fmt.Errorf("invalid range %q", h)
+		if err != nil {
+			return nil, nil
+		}
+		if end < start {
+			return nil, errRangeUnsatisfiable
 		}
 		if end >= size {
 			end = size - 1
 		}
 	}
-	return &httpRange{start: start, length: end - start + 1}, nil
+	return &ByteRange{Start: start, Length: end - start + 1}, nil
 }
 
 func writeObjectHeaders(w http.ResponseWriter, meta *ObjectMeta, status int) {
@@ -301,7 +318,27 @@ func writeObjectHeaders(w http.ResponseWriter, meta *ObjectMeta, status int) {
 }
 
 func (s *s3Server) handleGetObject(w http.ResponseWriter, r *http.Request, bucket, key string) error {
-	rc, meta, err := s.store.Get(r.Context(), bucket, key)
+	var (
+		rng   *ByteRange
+		total int64
+	)
+	if rngHdr := r.Header.Get("Range"); rngHdr != "" {
+		// resolve the range against the object size before reading: an
+		// unsatisfiable range then costs a HEAD, not the whole body
+		head, err := s.store.Head(r.Context(), bucket, key)
+		if err == ErrNotFound {
+			return &s3Error{http.StatusNotFound, "NoSuchKey", "The specified key does not exist."}
+		}
+		if err != nil {
+			return err
+		}
+		total = head.Size
+		if rng, err = parseByteRange(rngHdr, total); err != nil {
+			return err
+		}
+	}
+
+	rc, meta, err := s.store.Get(r.Context(), bucket, key, rng)
 	if err == ErrNotFound {
 		return &s3Error{http.StatusNotFound, "NoSuchKey", "The specified key does not exist."}
 	}
@@ -310,27 +347,21 @@ func (s *s3Server) handleGetObject(w http.ResponseWriter, r *http.Request, bucke
 	}
 	defer rc.Close()
 
-	if rngHdr := r.Header.Get("Range"); rngHdr != "" {
-		rng, err := parseRange(rngHdr, meta.Size)
-		if err != nil {
-			return &s3Error{http.StatusRequestedRangeNotSatisfiable, "InvalidRange",
-				"The requested range is not satisfiable"}
+	if rng != nil {
+		// the store contract is exactly rng.Length bytes; clamp anyway so the
+		// declared length can never exceed what is written
+		if meta.Size > rng.Length {
+			meta.Size = rng.Length
 		}
-		total := meta.Size
-		if seeker, ok := rc.(io.ReadSeeker); ok {
-			if _, err := seeker.Seek(rng.start, io.SeekStart); err != nil {
-				return err
-			}
-			rc = io.NopCloser(io.LimitReader(seeker, rng.length))
-		}
-		meta.Size = rng.length
 		w.Header().Set("Content-Range",
-			fmt.Sprintf("bytes %d-%d/%d", rng.start, rng.start+rng.length-1, total))
+			fmt.Sprintf("bytes %d-%d/%d", rng.Start, rng.Start+meta.Size-1, total))
 		writeObjectHeaders(w, meta, http.StatusPartialContent)
 	} else {
 		writeObjectHeaders(w, meta, http.StatusOK)
 	}
-	_, err = io.Copy(w, rc)
+	// never write past the declared Content-Length: an over-long body makes
+	// net/http abort the connection mid-response
+	_, err = io.Copy(w, io.LimitReader(rc, meta.Size))
 	return err
 }
 
@@ -389,7 +420,7 @@ func (s *s3Server) handleCopyObject(w http.ResponseWriter, r *http.Request, buck
 	if !ok || srcBucket == "" || srcKey == "" {
 		return &s3Error{http.StatusBadRequest, "InvalidArgument", "X-Amz-Copy-Source"}
 	}
-	rc, srcMeta, err := s.store.Get(r.Context(), srcBucket, srcKey)
+	rc, srcMeta, err := s.store.Get(r.Context(), srcBucket, srcKey, nil)
 	if err == ErrNotFound {
 		return &s3Error{http.StatusNotFound, "NoSuchKey", "The specified key does not exist."}
 	}

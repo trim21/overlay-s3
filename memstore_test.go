@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"crypto/md5"
 	"encoding/hex"
@@ -72,21 +73,27 @@ func (s *memStore) Put(ctx context.Context, bucket, key string, body io.Reader, 
 	return &ObjectMeta{Key: key, Size: int64(len(data)), ETag: etag, LastModified: lm, ContentType: contentType}, nil
 }
 
-func (s *memStore) Get(ctx context.Context, bucket, key string) (io.ReadCloser, *ObjectMeta, error) {
+func (s *memStore) Get(ctx context.Context, bucket, key string, rng *ByteRange) (io.ReadCloser, *ObjectMeta, error) {
 	s.mu.Lock()
 	obj, ok := s.objects[bucket][key]
 	if !ok {
 		s.mu.Unlock()
 		return nil, nil, ErrNotFound
 	}
+	data := obj.data
+	if rng != nil {
+		start := min(rng.Start, int64(len(data)))
+		end := min(rng.Start+rng.Length, int64(len(data)))
+		data = data[start:end]
+	}
 	meta := &ObjectMeta{
 		Key:          key,
-		Size:         int64(len(obj.data)),
+		Size:         int64(len(data)),
 		ETag:         obj.etag,
 		LastModified: obj.lastModified,
 		ContentType:  obj.contentType,
 	}
-	rc := io.NopCloser(strings.NewReader(string(obj.data)))
+	rc := io.NopCloser(bytes.NewReader(data))
 	s.mu.Unlock()
 	return rc, meta, nil
 }

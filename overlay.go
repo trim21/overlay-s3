@@ -100,15 +100,15 @@ func newOverlayStore(overlay, baseline Store) *overlayStore {
 	return &overlayStore{overlay: overlay, baseline: baseline, sessions: newListSessions()}
 }
 
-func (o *overlayStore) Get(ctx context.Context, bucket, key string) (io.ReadCloser, *ObjectMeta, error) {
-	rc, meta, err := o.overlay.Get(ctx, bucket, key)
+func (o *overlayStore) Get(ctx context.Context, bucket, key string, rng *ByteRange) (io.ReadCloser, *ObjectMeta, error) {
+	rc, meta, err := o.overlay.Get(ctx, bucket, key, rng)
 	if err == nil {
 		return rc, meta, nil
 	}
 	if err != ErrNotFound {
 		return nil, nil, err
 	}
-	return o.baseline.Get(ctx, bucket, key)
+	return o.baseline.Get(ctx, bucket, key, rng)
 }
 
 func (o *overlayStore) Head(ctx context.Context, bucket, key string) (*ObjectMeta, error) {

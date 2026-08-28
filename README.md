@@ -19,6 +19,8 @@ client ──▶ overlay-s3 (S3 API, SigV4) ──▶ overlay S3 (writes, reads 
 ```
 
 - `GET` / `HEAD`: overlay first, baseline on miss
+- ranged `GET`: the byte range is resolved against the object size and passed
+  through to the backend
 - `PUT` / multipart: proxied to the overlay S3 only, the baseline is never modified
 - `ListObjects` / `ListBuckets`: merged view of both stores, overlay keys win
 - deletion is not supported and answered with `NotImplemented`
@@ -172,6 +174,8 @@ of client compatibility.
 ## Limitations
 
 - object and bucket deletion are not supported (`NotImplemented`)
+- multi-part `Range` requests (`bytes=0-1,5-9`) are not served as
+  `multipart/byteranges`: the header is ignored and the whole object returned
 - `chunked` (streaming) payload signing and presigned URLs are not supported
 - multipart object `GET`/`HEAD` ETags carry the combined digest without the
   `-N` part count suffix

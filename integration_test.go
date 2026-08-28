@@ -159,6 +159,17 @@ func mustGet(t *testing.T, client *s3.Client, bucket, key string) string {
 	return readBody(t, out)
 }
 
+func mustGetRange(t *testing.T, client *s3.Client, bucket, key, rangeHdr string) string {
+	t.Helper()
+	out, err := client.GetObject(context.Background(), &s3.GetObjectInput{
+		Bucket: aws.String(bucket), Key: aws.String(key), Range: aws.String(rangeHdr),
+	})
+	if err != nil {
+		t.Fatalf("GetObject %s/%s range %s: %v", bucket, key, rangeHdr, err)
+	}
+	return readBody(t, out)
+}
+
 func TestIntegrationOverlayAgainstRealS3(t *testing.T) {
 	ctx := context.Background()
 	s := newIntegrationStores(t)
@@ -252,6 +263,18 @@ func TestIntegrationOverlayAgainstRealS3(t *testing.T) {
 	if got := mustGet(t, s.seed, s.overlayBucket,
 		s.overlayPrefix+"/"+s.baselineBucket+"/shared"); got != "local-shared" {
 		t.Fatalf("overlay prefix mapping broken, got %q", got)
+	}
+
+	// a ranged read has to be served by the backend: a streamed body cannot be
+	// seeked, so the gateway must pass Range through
+	if got := mustGetRange(t, client, s.baselineBucket, "dir/remote", "bytes=0-3"); got != "nest" {
+		t.Fatalf("ranged baseline read = %q, want %q", got, "nest")
+	}
+	if got := mustGetRange(t, client, s.baselineBucket, "dir/remote", "bytes=-4"); got != "mote" {
+		t.Fatalf("ranged suffix read = %q, want %q", got, "mote")
+	}
+	if got := mustGetRange(t, client, s.baselineBucket, "shared", "bytes=6-"); got != "shared" {
+		t.Fatalf("ranged overlay read = %q, want %q", got, "shared")
 	}
 
 	// 4. listings merge: 4 keys, overlay shadows shared
