@@ -123,6 +123,14 @@ func (s *s3Store) listPrefix(bucket string) string {
 	return joinKey(s.mappedPrefix, bucket) + "/"
 }
 
+// backendPrefix is the physical listing prefix for one client bucket scoped by
+// a client-supplied prefix. listPrefix already carries its trailing slash, so
+// the two are concatenated: routing them through joinKey would insert a second
+// slash, and MinIO rejects any listing prefix containing "//".
+func (s *s3Store) backendPrefix(bucket, clientPrefix string) string {
+	return s.listPrefix(bucket) + clientPrefix
+}
+
 // unmapKey reverses mapKey for listing results; ok is false for keys outside
 // the mapping root. A bare bucket segment decodes as the directory-marker
 // object written by CreateBucket (empty object key).
@@ -238,7 +246,7 @@ func (s *s3Store) ListPage(ctx context.Context, bucket string, p ListParams) (Li
 	b, _ := s.mapKey(bucket, "")
 	in := &s3.ListObjectsV2Input{
 		Bucket:  aws.String(b),
-		Prefix:  aws.String(joinKey(s.listPrefix(bucket), p.Prefix)),
+		Prefix:  aws.String(s.backendPrefix(bucket, p.Prefix)),
 		MaxKeys: aws.Int32(int32(p.MaxKeys)),
 	}
 	if p.Delimiter != "" {

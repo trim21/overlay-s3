@@ -13,6 +13,7 @@ import (
 
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/aws/signer/v4"
+	"github.com/aws/smithy-go"
 )
 
 func sha256hex(s string) string {
@@ -296,6 +297,58 @@ func TestServerListObjectsV2(t *testing.T) {
 	if !strings.Contains(body, "<Key>a</Key>") ||
 		!strings.Contains(body, "<Prefix>dir/</Prefix>") {
 		t.Fatalf("delimiter grouping wrong:\n%s", body)
+	}
+}
+
+// failingListStore stands in for a backend store that rejects a listing
+// argument and surfaces the S3 API error it returned.
+type failingListStore struct {
+	Store
+	err error
+}
+
+func (f failingListStore) ListPage(context.Context, string, ListParams) (ListPage, error) {
+	return ListPage{}, f.err
+}
+
+// TestServerBackendAPIErrorBecomesClientError checks that a backend 4xx is
+// reported to the client as itself: previously every backend API error except
+// AccessDenied was logged and answered as a misleading 500 InternalError.
+func TestServerBackendAPIErrorBecomesClientError(t *testing.T) {
+	tests := []struct {
+		backendCode string
+		wantStatus  int
+		wantCode    string
+	}{
+		{"XMinioInvalidObjectName", http.StatusBadRequest, "InvalidObjectName"},
+		{"AccessDenied", http.StatusForbidden, "AccessDenied"},
+		// an unmapped backend failure must stay visible, not be renamed
+		{"SomethingElse", http.StatusInternalServerError, "InternalError"},
+	}
+	for _, tt := range tests {
+		baseline := failingListStore{
+			Store: newMemStore(),
+			err:   &smithy.GenericAPIError{Code: tt.backendCode, Message: "backend refused"},
+		}
+		ts := httptest.NewServer(newS3Server(newOverlayStore(newMemStore(), baseline)))
+		t.Cleanup(ts.Close)
+
+		resp, err := http.Get(ts.URL + "/bucket?list-type=2&prefix=dir/")
+		if err != nil {
+			t.Fatal(err)
+		}
+		data, err := io.ReadAll(resp.Body)
+		resp.Body.Close()
+		if err != nil {
+			t.Fatal(err)
+		}
+		if resp.StatusCode != tt.wantStatus {
+			t.Errorf("%s: status = %d, want %d:\n%s",
+				tt.backendCode, resp.StatusCode, tt.wantStatus, data)
+		}
+		if want := "<Code>" + tt.wantCode + "</Code>"; !strings.Contains(string(data), want) {
+			t.Errorf("%s: body = %s, want it to contain %s", tt.backendCode, data, want)
+		}
 	}
 }
 

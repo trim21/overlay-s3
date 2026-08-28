@@ -105,6 +105,22 @@ jobs:
           # listing through the gateway shows the overlay write
           mc ls gw/demo | grep 'up\.txt'
 
+          # nested writes, then a listing of a nested prefix: mc sends
+          # prefix=sql/dir/, which the gateway must append to the overlay
+          # root without doubling the slash (silo rejects "//" prefixes with
+          # XMinioInvalidObjectName)
+          printf 'nested-a' >/tmp/a.txt
+          printf 'nested-b' >/tmp/b.txt
+          mc cp /tmp/a.txt gw/demo/sql/dir/a.txt
+          mc cp /tmp/b.txt gw/demo/sql/dir/b.txt
+          mc ls gw/demo/sql/dir/ | grep 'a\.txt'
+          mc ls gw/demo/sql/dir/ | grep 'b\.txt'
+          test "$(mc cat gw/demo/sql/dir/a.txt)" = "nested-a"
+
+          # the parent listing groups the nested keys under a common prefix
+          mc ls gw/demo/sql/ | grep 'dir/'
+          test "$(mc ls --recursive gw/demo/sql/ | wc -l)" = "2"
+
           # cp into a bucket that was never created: the location
           # preflight must succeed and the write must land in the overlay
           mc cp /tmp/up.txt gw/never-created/up.txt

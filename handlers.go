@@ -41,6 +41,24 @@ func newS3Server(store Store) http.Handler {
 	return &s3Server{store: store}
 }
 
+// backendAPIError maps an S3 API error surfaced by a backend store onto the
+// client-facing error it should have produced. Without it a backend 4xx —
+// e.g. MinIO rejecting a listing prefix containing "//" — is logged and
+// returned as a misleading 500 InternalError.
+func backendAPIError(err error) *s3Error {
+	var apiErr smithy.APIError
+	if !errors.As(err, &apiErr) {
+		return nil
+	}
+	switch apiErr.ErrorCode() {
+	case "AccessDenied":
+		return &s3Error{http.StatusForbidden, "AccessDenied", apiErr.ErrorMessage()}
+	case "InvalidObjectName", "XMinioInvalidObjectName":
+		return &s3Error{http.StatusBadRequest, "InvalidObjectName", apiErr.ErrorMessage()}
+	}
+	return nil
+}
+
 func (s *s3Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	op, bucket, key := parseS3Request(r)
 	if err := s.dispatch(w, r, op, bucket, key); err != nil {
@@ -49,9 +67,8 @@ func (s *s3Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			writeS3Error(w, se.Status, se.Code, se.Message)
 			return
 		}
-		var apiErr smithy.APIError
-		if errors.As(err, &apiErr) && apiErr.ErrorCode() == "AccessDenied" {
-			writeS3Error(w, http.StatusForbidden, "AccessDenied", apiErr.ErrorMessage())
+		if be := backendAPIError(err); be != nil {
+			writeS3Error(w, be.Status, be.Code, be.Message)
 			return
 		}
 		zlog.Error().Str("method", r.Method).Str("path", r.URL.Path).Err(err).Msg("s3 handler failed")

@@ -8,6 +8,7 @@ import (
 	"io"
 	"net/http/httptest"
 	"os"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -129,6 +130,22 @@ func readBody(t *testing.T, out *s3.GetObjectOutput) string {
 		t.Fatal(err)
 	}
 	return string(data)
+}
+
+func listKeys(out *s3.ListObjectsV2Output) []string {
+	keys := make([]string, 0, len(out.Contents))
+	for _, o := range out.Contents {
+		keys = append(keys, aws.ToString(o.Key))
+	}
+	return keys
+}
+
+func listCommonPrefixes(out *s3.ListObjectsV2Output) []string {
+	prefixes := make([]string, 0, len(out.CommonPrefixes))
+	for _, p := range out.CommonPrefixes {
+		prefixes = append(prefixes, aws.ToString(p.Prefix))
+	}
+	return prefixes
 }
 
 func mustGet(t *testing.T, client *s3.Client, bucket, key string) string {
@@ -265,6 +282,35 @@ func TestIntegrationOverlayAgainstRealS3(t *testing.T) {
 		t.Fatalf("remote-only missing from merged listing")
 	}
 
+	// a prefixed listing must reach the backend as
+	// <overlay prefix>/<bucket>/<client prefix>: silo rejects any listing
+	// prefix containing "//", which made every `mc ls <bucket>/<dir>/` fail
+	list, err = client.ListObjectsV2(ctx, &s3.ListObjectsV2Input{
+		Bucket: aws.String(s.baselineBucket), Prefix: aws.String("dir/"),
+	})
+	if err != nil {
+		t.Fatalf("ListObjectsV2 with prefix dir/: %v", err)
+	}
+	if got := listKeys(list); !reflect.DeepEqual(got, []string{"dir/remote"}) {
+		t.Fatalf("listing with prefix dir/ = %v, want [dir/remote]", got)
+	}
+
+	// a delimiter listing folds nested keys into common prefixes, merged
+	// across both stores
+	list, err = client.ListObjectsV2(ctx, &s3.ListObjectsV2Input{
+		Bucket: aws.String(s.baselineBucket), Delimiter: aws.String("/"),
+	})
+	if err != nil {
+		t.Fatalf("ListObjectsV2 with delimiter: %v", err)
+	}
+	if got := listKeys(list); !reflect.DeepEqual(got,
+		[]string{"new-local", "remote-only", "shared"}) {
+		t.Fatalf("delimited listing keys = %v", got)
+	}
+	if got := listCommonPrefixes(list); !reflect.DeepEqual(got, []string{"dir/"}) {
+		t.Fatalf("delimited listing common prefixes = %v, want [dir/]", got)
+	}
+
 	// 5. bucket listings are the union of both stores
 	buckets, err := client.ListBuckets(ctx, &s3.ListBucketsInput{})
 	if err != nil {
@@ -353,11 +399,13 @@ func TestIntegrationListPagination(t *testing.T) {
 	ctx := context.Background()
 	s := newIntegrationStores(t)
 
-	// seed more than one backend page (1000) so s3Store.List must walk
-	// continuation tokens
+	// seed more than one backend page (1000) so the listing cursor must walk
+	// continuation tokens; the nested prefix is what `mc ls <bucket>/dir/`
+	// sends, and the backend prefix has to append it without doubling the
+	// slash
 	const n = 1001
 	for i := 0; i < n; i++ {
-		key := fmt.Sprintf("key-%05d", i)
+		key := fmt.Sprintf("dir/key-%05d", i)
 		if _, err := s.seed.PutObject(ctx, &s3.PutObjectInput{
 			Bucket: aws.String(s.baselineBucket), Key: aws.String(key),
 			Body: strings.NewReader(key),
@@ -373,6 +421,7 @@ func TestIntegrationListPagination(t *testing.T) {
 	for {
 		out, err := client.ListObjectsV2(ctx, &s3.ListObjectsV2Input{
 			Bucket:            aws.String(s.baselineBucket),
+			Prefix:            aws.String("dir/"),
 			ContinuationToken: token,
 		})
 		if err != nil {
@@ -393,8 +442,8 @@ func TestIntegrationListPagination(t *testing.T) {
 		t.Fatalf("merged listing = %d objects, want %d", len(got), n)
 	}
 	for i, want := range got {
-		if want != fmt.Sprintf("key-%05d", i) {
-			t.Fatalf("listing[%d] = %q, want %q", i, want, fmt.Sprintf("key-%05d", i))
+		if want != fmt.Sprintf("dir/key-%05d", i) {
+			t.Fatalf("listing[%d] = %q, want %q", i, want, fmt.Sprintf("dir/key-%05d", i))
 		}
 	}
 }
