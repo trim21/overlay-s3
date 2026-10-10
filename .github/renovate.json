@@ -3,5 +3,7 @@
   "extends": [
     "local>trim21/renovate-config",
     "local>trim21/renovate-config:monthly"
-  ]
+  ],
+  "labels": ["dependencies", "ci:auto-merge"],
+  "rebaseWhen": "conflicted"
 }
