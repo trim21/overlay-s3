@@ -46,7 +46,7 @@ jobs:
           S3_TEST_SECRET_KEY: minioadmin-secret
           S3_TEST_REGION: us-east-1
 
-      - uses: prefix-dev/setup-pixi@v0.11.0
+      - uses: prefix-dev/setup-pixi@v0.11.3
         with:
           pixi-version: v0.83.0
           run-install: false
