@@ -209,6 +209,16 @@ aws --endpoint-url http://127.0.0.1:8080 s3 cp local-file s3://demo/key
 写操作只落在 silo 的 `overlay-data` bucket 的 `gateway/` 前缀下，
 基线 bucket 只提供读回退，不会被修改。
 
+镜像里还带着完整源码和这份文档（`/src`），没有可用 S3、网关起不来时也能先读配置说明：
+
+```bash
+docker run --rm --entrypoint cat ghcr.io/trim21/overlay-s3:latest /src/README.md
+docker run --rm --entrypoint ls ghcr.io/trim21/overlay-s3:latest /src
+```
+
+配置写好后网关启动时会把每个 bucket 的 overlay 后端连一遍（`EnsureBucket`），
+所以配置里的 endpoint 必须可达，否则进程直接退出。
+
 ## Testing
 
 Unit tests need no external services:
