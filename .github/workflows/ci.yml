@@ -58,21 +58,56 @@ jobs:
       - name: Start overlay-s3 gateway
         run: |
           go build -o overlay-s3 .
-          ./overlay-s3 \
-            -listen 127.0.0.1:8080 \
-            -overlay-endpoint http://127.0.0.1:9000 \
-            -overlay-region us-east-1 \
-            -overlay-access-key minioadmin \
-            -overlay-secret-key minioadmin-secret \
-            -overlay-bucket overlay-data \
-            -overlay-prefix gateway \
-            -baseline-endpoint http://127.0.0.1:9000 \
-            -baseline-region us-east-1 \
-            -baseline-access-key minioadmin \
-            -baseline-secret-key minioadmin-secret \
-            -auth-key demo \
-            -auth-secret demo-secret \
-            >/tmp/overlay-s3.log 2>&1 &
+          cat >/tmp/overlay-s3.toml <<'TOML'
+          listen = "127.0.0.1:8080"
+          auth_key = "demo"
+          auth_secret = "demo-secret"
+
+          [buckets.demo.overlay]
+          endpoint = "http://127.0.0.1:9000"
+          region = "us-east-1"
+          access_key = "minioadmin"
+          secret_key = "minioadmin-secret"
+          bucket = "overlay-data"
+          prefix = "gateway"
+
+          [buckets.demo.baseline]
+          endpoint = "http://127.0.0.1:9000"
+          region = "us-east-1"
+          access_key = "minioadmin"
+          secret_key = "minioadmin-secret"
+
+          [buckets.baseline-data.overlay]
+          endpoint = "http://127.0.0.1:9000"
+          region = "us-east-1"
+          access_key = "minioadmin"
+          secret_key = "minioadmin-secret"
+          bucket = "overlay-data"
+          prefix = "gateway"
+
+          [buckets.baseline-data.baseline]
+          endpoint = "http://127.0.0.1:9000"
+          region = "us-east-1"
+          access_key = "minioadmin"
+          secret_key = "minioadmin-secret"
+
+          # configured but never created on the baseline: writes still land in
+          # the overlay
+          [buckets.never-created.overlay]
+          endpoint = "http://127.0.0.1:9000"
+          region = "us-east-1"
+          access_key = "minioadmin"
+          secret_key = "minioadmin-secret"
+          bucket = "overlay-data"
+          prefix = "gateway"
+
+          [buckets.never-created.baseline]
+          endpoint = "http://127.0.0.1:9000"
+          region = "us-east-1"
+          access_key = "minioadmin"
+          secret_key = "minioadmin-secret"
+          TOML
+          ./overlay-s3 -config /tmp/overlay-s3.toml >/tmp/overlay-s3.log 2>&1 &
           for i in $(seq 1 60); do
             if curl -s -o /dev/null http://127.0.0.1:8080/; then
               echo "gateway ready"
@@ -83,6 +118,15 @@ jobs:
           echo "gateway failed to become ready"
           cat /tmp/overlay-s3.log
           exit 1
+
+      - name: Gateway docs endpoint
+        run: |
+          set -euo pipefail
+          curl -sf http://127.0.0.1:8080/_overlay-s3 -o /tmp/docs.md
+          head -1 /tmp/docs.md | grep -qx '# overlay-s3'
+          grep -q '\[buckets.demo.overlay\]' /tmp/docs.md
+          # documentation is public, the S3 API itself is signed
+          test "$(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:8080/)" = "403"
 
       - name: mc end-to-end (ls / cp / cat)
         run: |
@@ -128,6 +172,27 @@ jobs:
           # preflight must succeed and the write must land in the overlay
           mc cp /tmp/up.txt gw/never-created/up.txt
           test "$(mc cat gw/never-created/up.txt)" = "hello-from-mc"
+
+          # every configured bucket is advertised, and only those
+          test "$(mc ls gw/ | awk '{print $NF}' | sort | tr '\n' ' ')" = "baseline-data/ demo/ never-created/ "
+
+          # an unconfigured bucket does not exist for any operation
+          if mc mb gw/not-configured 2>/tmp/unknown-bucket.err; then
+            echo "gateway accepted an unconfigured bucket"
+            exit 1
+          fi
+          grep -Eq 'NoSuchBucket|does not exist' /tmp/unknown-bucket.err
+
+          # the same key in two buckets stays separate: each configured bucket
+          # maps to its own prefix inside the shared overlay bucket
+          printf 'in-demo' >/tmp/in-demo.txt
+          printf 'in-baseline-data' >/tmp/in-baseline.txt
+          mc cp /tmp/in-demo.txt gw/demo/multi.txt
+          mc cp /tmp/in-baseline.txt gw/baseline-data/multi.txt
+          test "$(mc cat gw/demo/multi.txt)" = "in-demo"
+          test "$(mc cat gw/baseline-data/multi.txt)" = "in-baseline-data"
+          test "$(mc cat silo/overlay-data/gateway/demo/multi.txt)" = "in-demo"
+          test "$(mc cat silo/overlay-data/gateway/baseline-data/multi.txt)" = "in-baseline-data"
 
           # download the object back
           mc cp gw/demo/up.txt /tmp/down.txt
