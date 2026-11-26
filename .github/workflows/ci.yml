@@ -8,11 +8,11 @@ jobs:
   test:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@v7.0.1
 
-      - uses: actions/setup-go@v7
+      - uses: actions/setup-go@v7.1.0
         with:
-          go-version: "1.27"
+          go-version: "1.27.4"
           cache: true
 
       - name: Start silo S3 backend
@@ -48,7 +48,7 @@ jobs:
 
       - uses: prefix-dev/setup-pixi@v0.11.3
         with:
-          pixi-version: v0.83.0
+          pixi-version: v0.85.0
           run-install: false
           global-environments: minio-client
 
