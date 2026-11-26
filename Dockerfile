@@ -10,6 +10,10 @@ FROM alpine:3.24@sha256:be2656061b536c1883c4034790e21d0a09c5aaaf51968b89368a3c03
 
 RUN apk add --no-cache ca-certificates
 COPY --from=builder /out/overlay-s3 /usr/local/bin/overlay-s3
+# the source tree ships in the image too: the config reference (README.md) and
+# the config structs can be read with `docker run --entrypoint cat ... /src/...`
+# before the gateway is configured and started
+COPY --from=builder /src /src
 
 EXPOSE 8080
 
